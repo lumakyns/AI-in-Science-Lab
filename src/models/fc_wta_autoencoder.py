@@ -7,12 +7,12 @@ class FC_WTA_Autoencoder(nn.Module):
     def __init__(
         self,
         dim: tuple,
-        k: float,
+        k: int,
     ) -> None:
         super().__init__()
 
         self.input_dim, self.bottleneck_dim = dim
-        self.k = k
+        self.k = k  # number of winners (activations to keep) per hidden unit
 
         self.encoder      = nn.Linear(self.input_dim, self.bottleneck_dim)
         self.relu         = nn.ReLU()
@@ -30,7 +30,8 @@ class FC_WTA_Autoencoder(nn.Module):
         a1 = self.relu(z1)
 
         if self.training:
-            _, a1_topk_idx = torch.topk(a1, max(1, int(x.shape[0] * self.k)), dim=0)
+            k_count = min(max(1, self.k), x.shape[0])
+            _, a1_topk_idx = torch.topk(a1, k_count, dim=0)
             a1_wta_mask = torch.zeros_like(a1)
             a1_wta_mask.scatter_(0, a1_topk_idx, 1)
             a1 = a1 * a1_wta_mask

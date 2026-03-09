@@ -7,20 +7,17 @@ class K_Sparse_Autoencoder(nn.Module):
     def __init__(
         self,
         dim: tuple,
-        a: int,
-        k: float,
+        k: int,
         total_epochs: int,
     ) -> None:
         super().__init__()
 
         self.input_dim, self.bottleneck_dim = dim
-        self.a            = a
-        self.k            = k
-        self.k_start      = 1.0
+        self.k = k  # number of activations to keep per sample
         self.total_epochs = total_epochs
 
-        self.encoder      = nn.Linear(self.input_dim, self.bottleneck_dim)
-        self.identity     = nn.Identity()
+        self.encoder = nn.Linear(self.input_dim, self.bottleneck_dim)
+        self.identity = nn.Identity()
         self.decoder_bias = nn.Parameter(torch.zeros(self.input_dim))
 
     def forward(
@@ -37,14 +34,15 @@ class K_Sparse_Autoencoder(nn.Module):
         if self.training:
             anneal_epochs = self.total_epochs // 2
             if epoch < anneal_epochs:
-                progress  = epoch / anneal_epochs
-                current_k = self.k_start + progress * (self.k - self.k_start)
+                progress = epoch / anneal_epochs
+                current_k = self.bottleneck_dim + progress * (self.k - self.bottleneck_dim)
             else:
                 current_k = self.k
         else:
-            current_k = self.a * self.k
+            current_k = self.k
 
-        _, a1_topk_idx = torch.topk(a1, max(1, int(self.bottleneck_dim * current_k)), dim=1)
+        k_count = min(max(1, int(current_k)), self.bottleneck_dim)
+        _, a1_topk_idx = torch.topk(a1, k_count, dim=1)
         a1_wta_mask = torch.zeros_like(a1)
         a1_wta_mask.scatter_(1, a1_topk_idx, 1)
         a1 = a1 * a1_wta_mask
@@ -58,7 +56,7 @@ class K_Sparse_Autoencoder(nn.Module):
             x = x.unsqueeze(0)
 
         a1 = self.identity(self.encoder(x))
-        k_count = max(1, int(self.bottleneck_dim * self.a * self.k))
+        k_count = min(max(1, self.k), self.bottleneck_dim)
         _, topk_idx = torch.topk(a1, k_count, dim=1)
         mask = torch.zeros_like(a1).scatter_(1, topk_idx, 1)
         return a1 * mask
