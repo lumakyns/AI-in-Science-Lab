@@ -17,6 +17,7 @@ class WTA_CONV_AE(nn.Module):
         self.k_lifetime = k_lifetime
         padding = kernel_size // 2
 
+        self.padding      = padding
         self.encoder      = nn.Conv2d(self.in_ch, self.out_ch, kernel_size, padding=padding)
         self.relu         = nn.ReLU()
         self.decoder_bias = nn.Parameter(torch.zeros(self.in_ch, self.in_h, self.in_w))
@@ -50,5 +51,5 @@ class WTA_CONV_AE(nn.Module):
             a1 = self._apply_spatial_sparsity(a1)
             a1 = self._apply_lifetime_sparsity(a1)
 
-        z2 = F.conv_transpose2d(a1, self.encoder.weight) + self.decoder_bias.unsqueeze(0)
+        z2 = F.conv_transpose2d(a1, self.encoder.weight, padding=self.padding) + self.decoder_bias.unsqueeze(0)
         return z2.view(z2.shape[0], -1)
