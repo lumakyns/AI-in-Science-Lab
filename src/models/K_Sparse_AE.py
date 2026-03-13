@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class K_Sparse_Autoencoder(nn.Module):
+class K_Sparse_AE(nn.Module):
     def __init__(
         self,
         dim: tuple,
@@ -24,14 +24,12 @@ class K_Sparse_Autoencoder(nn.Module):
         self.identity     = nn.Identity()
         self.decoder_bias = nn.Parameter(torch.zeros(self.input_dim))
 
-    def _apply_topk_mask(self, activations: torch.Tensor, k_count: int) -> torch.Tensor:
-        k_count = min(max(1, int(k_count)), activations.shape[1])
-        
+    def _apply_k_sparsity(self, activations: torch.Tensor, k: float) -> tuple[torch.Tensor, int]:
+        k_count = min(max(1, int(k)), activations.shape[1])
         _, topk_idx = torch.topk(activations, k_count, dim=1)
         mask = torch.zeros_like(activations)
         mask.scatter_(1, topk_idx, 1)
-        
-        return activations * mask
+        return activations * mask, k_count
 
     def forward(
         self,
@@ -59,9 +57,6 @@ class K_Sparse_Autoencoder(nn.Module):
         else:
             current_k = self.a * self.k
 
-        k_count = min(max(1, int(current_k)), self.bottleneck_dim)
-        a1 = self._apply_topk_mask(a1, k_count)
+        a1, self.last_k = self._apply_k_sparsity(a1, current_k)
         z2 = F.linear(a1, self.encoder.weight.t(), self.decoder_bias)
-
-        self.last_k = k_count
         return z2

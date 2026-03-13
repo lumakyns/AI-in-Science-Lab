@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class FC_WTA_Autoencoder(nn.Module):
+class WTA_FC_AE(nn.Module):
     def __init__(
         self,
         dim: tuple,
@@ -18,10 +18,16 @@ class FC_WTA_Autoencoder(nn.Module):
         self.relu         = nn.ReLU()
         self.decoder_bias = nn.Parameter(torch.zeros(self.input_dim))
 
+    def _apply_lifetime_sparsity(self, activations: torch.Tensor) -> torch.Tensor:
+        k_count = min(max(1, self.k), activations.shape[0])
+        _, topk_idx = torch.topk(activations, k_count, dim=0)
+        mask = torch.zeros_like(activations)
+        mask.scatter_(0, topk_idx, 1)
+        return activations * mask
+
     def forward(
         self,
         x: torch.Tensor,
-        epoch: int = 0,
     ) -> torch.Tensor:
         if x.ndim == 1:
             x = x.unsqueeze(0)
@@ -30,11 +36,7 @@ class FC_WTA_Autoencoder(nn.Module):
         a1 = self.relu(z1)
 
         if self.training:
-            k_count = min(max(1, self.k), x.shape[0])
-            _, a1_topk_idx = torch.topk(a1, k_count, dim=0)
-            a1_wta_mask = torch.zeros_like(a1)
-            a1_wta_mask.scatter_(0, a1_topk_idx, 1)
-            a1 = a1 * a1_wta_mask
+            a1 = self._apply_lifetime_sparsity(a1)
 
         z2 = F.linear(a1, self.encoder.weight.t(), self.decoder_bias)
 
