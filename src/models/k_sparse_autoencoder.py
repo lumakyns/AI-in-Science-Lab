@@ -47,7 +47,7 @@ class K_Sparse_Autoencoder(nn.Module):
             anneal_samples  = (self.total_epochs // 2) * self.dataset_size
             
             if anneal_samples > 0:
-                progress = current_samples / anneal_samples
+                progress = min(current_samples / anneal_samples, 1.0)
             else:
                 progress = 1.0
 
