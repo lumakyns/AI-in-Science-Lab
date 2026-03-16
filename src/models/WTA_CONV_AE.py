@@ -8,17 +8,15 @@ class WTA_CONV_AE(nn.Module):
         dim: tuple,
         k_spatial: float,
         k_lifetime: float,
-        kernel_size: int = 3,
     ) -> None:
         super().__init__()
-        self.in_ch, self.in_h, self.in_w, self.out_ch = dim
+        self.in_ch, self.in_h, self.in_w, self.hidden_ch = dim
         self.k_spatial  = k_spatial
         self.k_lifetime = k_lifetime
 
-        self.padding = kernel_size // 2
-        self.encoder = nn.Conv2d(self.in_ch, self.out_ch, kernel_size, padding=self.padding, bias=False)
-        self.decoder = nn.ConvTranspose2d(self.out_ch, self.in_ch, kernel_size, padding=self.padding, bias=False)
-        self.relu = nn.ReLU()
+        self.encoder   = nn.Conv2d(self.in_ch, self.hidden_ch, kernel_size=5, padding=2, bias=False)
+        self.decoder   = nn.ConvTranspose2d(self.hidden_ch, self.in_ch, kernel_size=11, padding=5, bias=False)
+        self.relu      = nn.ReLU()
 
     def _apply_spatial_sparsity(self, activations: torch.Tensor) -> torch.Tensor:
         B, C, H, W = activations.shape
