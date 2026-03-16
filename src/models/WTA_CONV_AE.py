@@ -7,22 +7,25 @@ class WTA_CONV_AE(nn.Module):
         self,
         dim: tuple,
         k_spatial: float,
-        k_lifetime: float,
-        use_population_sparsity: bool = False,
+        k_lifetime: float | None = None,
         k_population: float | None = None,
         total_epochs: int = 1,
         dataset_size: int = 1,
     ) -> None:
         super().__init__()
         self.in_ch, self.in_h, self.in_w, self.hidden_ch = dim
-        self.k_spatial  = k_spatial
-        self.k_lifetime = k_lifetime
-        self.k_population = k_population if k_population is not None else k_lifetime
+        self.k_spatial = k_spatial
         self.total_epochs = total_epochs
         self.dataset_size = dataset_size
 
-        if k_population is not None and k_lifetime is not None:
-            raise ValueError("Specify either lifetime k or population k, not both.")
+        if k_lifetime is not None and k_population is not None:
+            raise ValueError("Specify either k_lifetime or k_population, not both.")
+        if k_lifetime is None and k_population is None:
+            raise ValueError("Specify one of k_lifetime or k_population.")
+
+        self.use_population_sparsity = k_population is not None
+        self.k_lifetime   = k_lifetime
+        self.k_population = k_population
 
         self.encoder = nn.Conv2d(self.in_ch, self.hidden_ch, kernel_size=5, padding=2, bias=False)
         self.decoder = nn.ConvTranspose2d(self.hidden_ch, self.in_ch, kernel_size=11, padding=5, bias=False)
