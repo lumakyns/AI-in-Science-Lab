@@ -24,10 +24,7 @@ class WTA_FC_AE(nn.Module):
         _, topk_idx = torch.topk(activations, k_count, dim=0)
         mask = torch.zeros_like(activations)
         mask.scatter_(0, topk_idx, 1)
-        sparse = activations * mask
-        if not self.training:
-            self.last_activated_hidden_units = sparse.detach()
-        return sparse
+        return activations * mask
 
     def forward(
         self,
@@ -43,6 +40,9 @@ class WTA_FC_AE(nn.Module):
             a1 = self._apply_lifetime_sparsity(a1)
         else:
             self.last_latent = a1.detach()
+            self.last_filter_mask = torch.ones(
+                a1.shape[0], self.bottleneck_dim, device=a1.device, dtype=a1.dtype
+            )
 
         z2 = self.decoder(a1)
 

@@ -26,8 +26,10 @@ class Autoencoder(nn.Module):
         z1 = self.encoder(x)
         a1 = self.sigmoid(z1)
         if not self.training:
-            self.last_latent                 = a1.detach()
-            self.last_activated_hidden_units = a1.detach()
+            self.last_latent = a1.detach()
+            self.last_filter_mask = torch.ones(
+                a1.shape[0], self.bottleneck_dim, device=a1.device, dtype=a1.dtype
+            )
         z2 = self.decoder(a1)
 
         return z2

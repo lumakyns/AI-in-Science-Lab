@@ -49,7 +49,7 @@ class K_Sparse_AE(nn.Module):
         mask.scatter_(1, topk_idx, 1)
         sparse = activations * mask
         if not self.training:
-            self.last_activated_hidden_units = sparse.detach()
+            self.last_filter_mask = mask.detach()
         return sparse
 
     def forward(
