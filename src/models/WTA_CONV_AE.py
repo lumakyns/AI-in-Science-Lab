@@ -19,6 +19,7 @@ class WTA_CONV_AE(nn.Module):
         self.total_epochs = total_epochs
         self.dataset_size = dataset_size
         self.a = a
+        self.uses_k_population = True
 
         # population sparsity is offered as an option in WTA_CONV so we keep things biologically plausible
         if k_lifetime is not None and k_population is not None:

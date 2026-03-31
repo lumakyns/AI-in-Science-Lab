@@ -10,6 +10,7 @@ class Autoencoder(nn.Module):
         super().__init__()
 
         self.input_dim, self.bottleneck_dim = dim
+        self.uses_k_population = False
 
         self.encoder = nn.Linear(self.input_dim, self.bottleneck_dim, bias=False)
         self.sigmoid = nn.Sigmoid()

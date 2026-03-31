@@ -12,6 +12,7 @@ class WTA_FC_AE(nn.Module):
 
         self.input_dim, self.bottleneck_dim = dim
         self.k_lifetime = k_lifetime
+        self.uses_k_population = False
 
         self.encoder = nn.Linear(self.input_dim, self.bottleneck_dim, bias=False)
         self.relu    = nn.ReLU()
