@@ -14,6 +14,7 @@ class WTA_CONV_AE(nn.Module):
         a: float = 1.0,
     ) -> None:
         super().__init__()
+        
         self.in_ch, self.in_h, self.in_w, self.hidden_ch = dim
         self.k_spatial    = k_spatial
         self.total_epochs = total_epochs
