@@ -20,6 +20,7 @@ class K_Sparse_AE(nn.Module):
         self.total_epochs = total_epochs
         self.dataset_size = dataset_size
         self.uses_k_population = True
+        self.is_convolutional  = False
 
         self.encoder  = nn.Linear(self.input_dim, self.bottleneck_dim, bias=False)
         self.identity = nn.Identity()

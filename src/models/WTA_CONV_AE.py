@@ -15,11 +15,12 @@ class WTA_CONV_AE(nn.Module):
     ) -> None:
         super().__init__()
         self.in_ch, self.in_h, self.in_w, self.hidden_ch = dim
-        self.k_spatial = k_spatial
+        self.k_spatial    = k_spatial
         self.total_epochs = total_epochs
         self.dataset_size = dataset_size
         self.a = a
         self.uses_k_population = True
+        self.is_convolutional  = True
 
         # population sparsity is offered as an option in WTA_CONV so we keep things biologically plausible
         if k_lifetime is not None and k_population is not None:
