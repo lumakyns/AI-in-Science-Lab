@@ -21,12 +21,10 @@ jobs:
         run: |
           mkdir -p ~/.config/rclone
           echo "${{ secrets.GDRIVE_CREDENTIALS }}" > credentials.json
-          cat > ~/.config/rclone/rclone.conf <<EOF
-[gdrive]
-type = drive
-scope = drive
-service_account_file = credentials.json
-EOF
+          echo "[gdrive]" > ~/.config/rclone/rclone.conf
+          echo "type = drive" >> ~/.config/rclone/rclone.conf
+          echo "scope = drive" >> ~/.config/rclone/rclone.conf
+          echo "service_account_file = credentials.json" >> ~/.config/rclone/rclone.conf
 
       - name: Upload files to Google Drive
         run: |
