@@ -20,7 +20,7 @@ jobs:
       - name: Configure rclone
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.GDRIVE_CREDENTIALS }}" | base64 --decode > credentials.json
+          echo "${{ secrets.GDRIVE_CREDENTIALS }}" | tr -d '\r\n' | base64 --decode > credentials.json
           echo "[gdrive]" > ~/.config/rclone/rclone.conf
           echo "type = drive" >> ~/.config/rclone/rclone.conf
           echo "scope = drive" >> ~/.config/rclone/rclone.conf
@@ -28,4 +28,8 @@ jobs:
 
       - name: Upload files to Google Drive
         run: |
-          rclone sync ./ "gdrive:Research/Unsupervised-Feature-Research" --filter-from .gitignore --progress
+          rclone sync ./ "gdrive:Research/Unsupervised-Feature-Research" \
+            --exclude "data/**" \
+            --exclude ".mypy_cache/**" \
+            --exclude ".git/**" \
+            --progress
