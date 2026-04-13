@@ -46,11 +46,11 @@ class WTA_FC_AE(nn.Module):
             x = x.unsqueeze(0)
 
         z1 = self.encoder(x)
-        a1 = self.relu(z1)
+        h1 = self.relu(z1)
 
         if self.training:
-            a1 = self._apply_lifetime_sparsity(a1)
+            h1 = self._apply_lifetime_sparsity(h1)
 
-        z2 = self.decoder(a1)
+        z2 = self.decoder(h1)
 
-        return z2, a1 # output, activations
+        return z2, h1 # output, hidden

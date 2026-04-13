@@ -106,9 +106,9 @@ class WTA_CONV_AE(nn.Module):
             x = x.view(x.shape[0], self.in_ch, self.in_h, self.in_w)
 
         z1 = self.encoder(x)
-        a1 = self.relu(z1)
+        h1 = self.relu(z1)
 
-        a1 = self._apply_spatial_sparsity(a1)
+        h1 = self._apply_spatial_sparsity(h1)
         if self.use_population_sparsity:
             target_k = self.k_population * self.hidden_ch
             current_k = self._compute_annealed_k(
@@ -118,11 +118,11 @@ class WTA_CONV_AE(nn.Module):
                 training=self.training,
             )
             self.last_k = min(max(1, int(current_k)), self.hidden_ch)
-            a1 = self._apply_population_sparsity(a1, current_k)
+            h1 = self._apply_population_sparsity(h1, current_k)
         else:
-            a1 = self._apply_lifetime_sparsity(a1)
+            h1 = self._apply_lifetime_sparsity(h1)
 
-        z2 = self.decoder(a1)
+        z2 = self.decoder(h1)
         z2 = z2.view(z2.shape[0], -1)
         
-        return z2, a1 # output, activations
+        return z2, h1 # output, hidden

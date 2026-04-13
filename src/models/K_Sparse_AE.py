@@ -70,7 +70,7 @@ class K_Sparse_AE(nn.Module):
             x = x.unsqueeze(0)
 
         z1 = self.encoder(x)
-        a1 = self.identity(z1)
+        h1 = self.identity(z1)
 
         target_k = self.k_population * self.bottleneck_dim
         current_k = self._compute_annealed_k(
@@ -81,11 +81,11 @@ class K_Sparse_AE(nn.Module):
         )
         self.last_k = current_k
 
-        a1 = self._apply_population_sparsity(a1, current_k)
+        h1 = self._apply_population_sparsity(h1, current_k)
         
         if not self.training:
-            self.last_latent = a1.detach()
+            self.last_latent = h1.detach()
             
-        z2 = self.decoder(a1)
+        z2 = self.decoder(h1)
         
-        return z2, a1 # output, activations
+        return z2, h1 # output, hidden

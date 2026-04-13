@@ -36,10 +36,10 @@ class Autoencoder(nn.Module):
             x = x.unsqueeze(0)
 
         z1 = self.encoder(x)
-        a1 = self.sigmoid(z1)
+        h1 = self.sigmoid(z1)
         if not self.training:
-            self.last_latent = a1.detach()
+            self.last_latent = h1.detach()
             
-        z2 = self.decoder(a1)
+        z2 = self.decoder(h1)
 
-        return z2, a1 # output, activations
+        return z2, h1 # output, hidden
