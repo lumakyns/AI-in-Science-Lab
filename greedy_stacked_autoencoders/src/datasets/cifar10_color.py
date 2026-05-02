@@ -1,9 +1,12 @@
 import numpy as np
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 
 from .cifar10_patches_color import local_contrast_normalize, zca_whiten
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 class CIFAR10Color(Dataset):
@@ -14,7 +17,7 @@ class CIFAR10Color(Dataset):
         zca_eps: float = 1e-5,
     ) -> None:
         raw = datasets.CIFAR10(
-            "../data",
+            str(DATA_DIR),
             train=train,
             download=True,
             transform=transforms.ToTensor(),

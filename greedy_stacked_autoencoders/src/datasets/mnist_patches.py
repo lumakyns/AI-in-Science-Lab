@@ -1,11 +1,14 @@
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 class MNISTPatches(Dataset):
     def __init__(self, train: bool = True):
-        raw              = datasets.MNIST('../data', train=train, download=True,
+        raw              = datasets.MNIST(str(DATA_DIR), train=train, download=True,
                                           transform=transforms.ToTensor())
         loader           = DataLoader(raw, batch_size=len(raw), shuffle=False)
         images, _        = next(iter(loader))

@@ -1,8 +1,11 @@
 import numpy as np
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm.auto import tqdm
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def local_contrast_normalize(patches: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -30,7 +33,7 @@ class CIFAR10PatchesColor(Dataset):
         zca_eps: float = 1e-5,
     ):
         raw = datasets.CIFAR10(
-            "../data",
+            str(DATA_DIR),
             train=train,
             download=True,
             transform=transforms.ToTensor(),

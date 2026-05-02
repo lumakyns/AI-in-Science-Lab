@@ -1,7 +1,10 @@
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm.auto import tqdm
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 class CIFAR10Patches(Dataset):
@@ -12,7 +15,7 @@ class CIFAR10Patches(Dataset):
         patch_size: int = 8,
     ):
         raw = datasets.CIFAR10(
-            "../data",
+            str(DATA_DIR),
             train=train,
             download=True,
             transform=transforms.Compose(

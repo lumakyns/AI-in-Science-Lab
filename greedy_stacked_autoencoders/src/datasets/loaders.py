@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -5,6 +7,8 @@ from .mnist_patches import MNISTPatches
 from .cifar10_patches import CIFAR10Patches
 from .cifar10_patches_color import CIFAR10PatchesColor
 from .cifar10_color import CIFAR10Color
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 def get_data_loader(dataset: str, train: bool = True, batch_size: int = 128) -> DataLoader:
@@ -26,7 +30,7 @@ def get_data_loader(dataset: str, train: bool = True, batch_size: int = 128) -> 
             transforms.Normalize((0.1307,), (0.3081,)),
             lambda x: x.flatten(),
         ])
-        return DataLoader(datasets.MNIST('../data', train=train, download=True, transform=transform),
+        return DataLoader(datasets.MNIST(str(DATA_DIR), train=train, download=True, transform=transform),
                           batch_size=batch_size, shuffle=train, pin_memory=True)
 
     elif dataset == "cifar10":
@@ -36,7 +40,7 @@ def get_data_loader(dataset: str, train: bool = True, batch_size: int = 128) -> 
             transforms.Normalize((0.5,), (0.5,)),
             lambda x: x.flatten(),
         ])
-        return DataLoader(datasets.CIFAR10('../data', train=train, download=True, transform=transform),
+        return DataLoader(datasets.CIFAR10(str(DATA_DIR), train=train, download=True, transform=transform),
                           batch_size=batch_size, shuffle=train, pin_memory=True)
 
     elif dataset == "cifar10_color":
