@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm.auto import tqdm
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 
 def local_contrast_normalize(patches: np.ndarray, eps: float = 1e-8) -> np.ndarray:

@@ -6,7 +6,7 @@ from torchvision import datasets, transforms
 
 from .cifar10_patches_color import local_contrast_normalize, zca_whiten
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 
 class CIFAR10Color(Dataset):

@@ -8,7 +8,7 @@ from .cifar10_patches import CIFAR10Patches
 from .cifar10_patches_color import CIFAR10PatchesColor
 from .cifar10_color import CIFAR10Color
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 
 def get_data_loader(dataset: str, train: bool = True, batch_size: int = 128) -> DataLoader:
