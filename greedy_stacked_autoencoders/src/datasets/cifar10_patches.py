@@ -5,6 +5,8 @@ from torchvision import datasets, transforms
 from tqdm.auto import tqdm
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+CIFAR10_MIRROR_URL = "https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz"
+datasets.CIFAR10.url = CIFAR10_MIRROR_URL
 
 
 class CIFAR10Patches(Dataset):

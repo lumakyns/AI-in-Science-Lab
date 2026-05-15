@@ -7,6 +7,8 @@ from torchvision import datasets, transforms
 from .cifar10_patches_color import local_contrast_normalize, zca_whiten
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+CIFAR10_MIRROR_URL = "https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz"
+datasets.CIFAR10.url = CIFAR10_MIRROR_URL
 
 
 class CIFAR10Color(Dataset):

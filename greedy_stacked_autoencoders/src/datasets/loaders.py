@@ -9,6 +9,8 @@ from .cifar10_patches_color import CIFAR10PatchesColor
 from .cifar10_color import CIFAR10Color
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+CIFAR10_MIRROR_URL = "https://data.brainchip.com/dataset-mirror/cifar10/cifar-10-python.tar.gz"
+datasets.CIFAR10.url = CIFAR10_MIRROR_URL
 
 
 def get_data_loader(dataset: str, train: bool = True, batch_size: int = 128) -> DataLoader:
