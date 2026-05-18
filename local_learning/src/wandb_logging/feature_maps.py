@@ -28,9 +28,10 @@ def log_channel_stats(feature_maps: list) -> dict[str, torch.Tensor]:
             )
 
         fmap = feature_map.detach()
-        stats[f"{layer_name}/channel_mean"] = fmap.mean(dim=(0, 2, 3)).cpu()
-        stats[f"{layer_name}/channel_min"] = fmap.amin(dim=(0, 2, 3)).cpu()
-        stats[f"{layer_name}/channel_max"] = fmap.amax(dim=(0, 2, 3)).cpu()
-        stats[f"{layer_name}/channel_var"] = fmap.var(dim=(0, 2, 3), unbiased=False).cpu()
+        safe_name = layer_name.replace(".", "__").replace("/", "__")
+        stats[f"FeatureMean/{safe_name}"] = fmap.mean(dim=(0, 2, 3)).cpu()
+        stats[f"FeatureMin/{safe_name}"] = fmap.amin(dim=(0, 2, 3)).cpu()
+        stats[f"FeatureMax/{safe_name}"] = fmap.amax(dim=(0, 2, 3)).cpu()
+        stats[f"FeatureVariance/{safe_name}"] = fmap.var(dim=(0, 2, 3), unbiased=False).cpu()
 
     return stats

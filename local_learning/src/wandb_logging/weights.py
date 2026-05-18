@@ -18,7 +18,7 @@ def _conv_modules(model: nn.Module) -> list[tuple[str, ConvLike]]:
 def _safe_layer_name(module_name: str, module: ConvLike) -> str:
     """Convert a module path to a WandB-friendly layer name."""
     layer_type = "deconv" if isinstance(module, nn.ConvTranspose2d) else "conv"
-    return module_name.replace(".", "/") or layer_type
+    return module_name.replace(".", "__") or layer_type
 
 
 def _normalize_filter(filter_tensor: torch.Tensor) -> torch.Tensor:
@@ -94,7 +94,7 @@ def _kde_curve(values: torch.Tensor, *, points: int = 64) -> tuple[list[float], 
     return xs.tolist(), density.tolist()
 
 
-def log_weight_filter_grids(model: nn.Module, wandb_module: Any, *, prefix: str = "Weights") -> dict[str, Any]:
+def log_weight_filter_grids(model: nn.Module, wandb_module: Any, *, prefix: str = "FilterGrids") -> dict[str, Any]:
     """Create WandB images for the first 25 filters in every conv/deconv layer."""
     payload: dict[str, Any] = {}
 
@@ -103,28 +103,28 @@ def log_weight_filter_grids(model: nn.Module, wandb_module: Any, *, prefix: str 
         image = filter_grid.permute(1, 2, 0).numpy()
         layer_type = "deconv" if isinstance(module, nn.ConvTranspose2d) else "conv"
         safe_name = _safe_layer_name(module_name, module)
-        payload[f"{prefix}/{safe_name}/{layer_type}_filters"] = wandb_module.Image(image)
+        payload[f"{prefix}/{safe_name}_{layer_type}"] = wandb_module.Image(image)
 
     return payload
 
 
-def log_conv_weight_channel_stats(model: nn.Module, *, prefix: str = "Weights") -> dict[str, torch.Tensor]:
+def log_conv_weight_channel_stats(model: nn.Module) -> dict[str, torch.Tensor]:
     """Log per-filter max, min, mean, variance, and norm for every conv/deconv layer."""
     payload: dict[str, torch.Tensor] = {}
 
     for module_name, module in _conv_modules(model):
         values = _channel_values(_conv_filter_bank(module))
         safe_name = _safe_layer_name(module_name, module)
-        payload[f"{prefix}/{safe_name}/channel_max"] = values.amax(dim=1)
-        payload[f"{prefix}/{safe_name}/channel_min"] = values.amin(dim=1)
-        payload[f"{prefix}/{safe_name}/channel_mean"] = values.mean(dim=1)
-        payload[f"{prefix}/{safe_name}/channel_var"] = values.var(dim=1, unbiased=False)
-        payload[f"{prefix}/{safe_name}/channel_norm"] = values.norm(dim=1)
+        payload[f"WeightMax/{safe_name}"] = values.amax(dim=1)
+        payload[f"WeightMin/{safe_name}"] = values.amin(dim=1)
+        payload[f"WeightMean/{safe_name}"] = values.mean(dim=1)
+        payload[f"WeightVariance/{safe_name}"] = values.var(dim=1, unbiased=False)
+        payload[f"WeightNorm/{safe_name}"] = values.norm(dim=1)
 
     return payload
 
 
-def log_conv_gradient_channel_stats(model: nn.Module, *, prefix: str = "Gradients") -> dict[str, torch.Tensor]:
+def log_conv_gradient_channel_stats(model: nn.Module, *, prefix: str = "GradientMagnitude") -> dict[str, torch.Tensor]:
     """Log the per-filter gradient magnitude for every conv/deconv layer with gradients."""
     payload: dict[str, torch.Tensor] = {}
 
@@ -133,12 +133,12 @@ def log_conv_gradient_channel_stats(model: nn.Module, *, prefix: str = "Gradient
             continue
         grad_values = _channel_values(module.weight.grad)
         safe_name = _safe_layer_name(module_name, module)
-        payload[f"{prefix}/{safe_name}/channel_grad_magnitude"] = grad_values.norm(dim=1)
+        payload[f"{prefix}/{safe_name}"] = grad_values.norm(dim=1)
 
     return payload
 
 
-def log_conv_norm_kdes(model: nn.Module, wandb_module: Any, *, prefix: str = "Weights") -> dict[str, Any]:
+def log_conv_norm_kdes(model: nn.Module, wandb_module: Any, *, prefix: str = "WeightNormKDE") -> dict[str, Any]:
     """Log a simple KDE of filter norms for every conv/deconv layer."""
     payload: dict[str, Any] = {}
 
@@ -148,7 +148,7 @@ def log_conv_norm_kdes(model: nn.Module, wandb_module: Any, *, prefix: str = "We
         if not xs:
             continue
         safe_name = _safe_layer_name(module_name, module)
-        payload[f"{prefix}/{safe_name}/norm_kde"] = wandb_module.plot.line_series(
+        payload[f"{prefix}/{safe_name}"] = wandb_module.plot.line_series(
             xs=xs,
             ys=[ys],
             keys=["norm_kde"],
@@ -186,7 +186,7 @@ def log_inference_flops(
     sample_input: torch.Tensor,
     *,
     forward_kwargs: dict[str, Any] | None = None,
-    prefix: str = "FLOPs",
+    prefix: str = "FLOPsByLayer",
 ) -> dict[str, int]:
     """Run one eval forward pass with hooks and log estimated conv/deconv/linear FLOPs."""
     payload: dict[str, int] = {}
@@ -197,7 +197,7 @@ def log_inference_flops(
         def hook(_module, _inputs, output) -> None:
             if not isinstance(output, torch.Tensor):
                 return
-            safe_name = module_name.replace(".", "/") or module.__class__.__name__.lower()
+            safe_name = module_name.replace(".", "__") or module.__class__.__name__.lower()
             if isinstance(module, nn.Conv2d):
                 payload[f"{prefix}/{safe_name}"] = _conv2d_flops(module, output)
             elif isinstance(module, nn.ConvTranspose2d):
@@ -221,5 +221,5 @@ def log_inference_flops(
         if was_training:
             model.train()
 
-    payload[f"{prefix}/total"] = int(sum(payload.values()))
+    payload["FLOPsTotal/value"] = int(sum(payload.values()))
     return payload
