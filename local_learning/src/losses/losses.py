@@ -122,6 +122,35 @@ class ClassificationLoss(nn.Module):
         return ce_loss
 
 
+class LocalClassificationReconstructionLoss(nn.Module):
+    def __init__(self, reconstruction_strength: float = 1.0) -> None:
+        super().__init__()
+        self.reconstruction_strength = float(reconstruction_strength)
+        self.ce = nn.CrossEntropyLoss()
+        self.mse = nn.MSELoss()
+        self.last_ce_loss = torch.tensor(0.0)
+        self.last_mse_loss = torch.tensor(0.0)
+        self.last_corr_total = torch.tensor(0.0)
+        self.last_corr_by_layer: dict[str, torch.Tensor] = {}
+
+    def forward(self, y: torch.Tensor, y_pred: torch.Tensor, fm_list: list | None = None) -> torch.Tensor:
+        ce_loss = self.ce(y_pred, y)
+        mse_loss = y_pred.new_zeros(())
+
+        for item in fm_list or []:
+            if not (isinstance(item, (tuple, list)) and len(item) == 3 and isinstance(item[0], str)):
+                continue
+            name, reconstruction, target = item
+            if name.endswith(".reconstruction"):
+                mse_loss = mse_loss + self.mse(reconstruction, target.detach())
+
+        self.last_ce_loss = ce_loss.detach()
+        self.last_mse_loss = mse_loss.detach()
+        self.last_corr_total = y_pred.new_zeros(()).detach()
+        self.last_corr_by_layer = {}
+        return ce_loss + (self.reconstruction_strength * mse_loss)
+
+
 class RedundancyLoss(CorrelationRedundancy, nn.Module):
     def __init__(
         self,
@@ -195,14 +224,24 @@ class ReconstructionLoss(nn.Module):
 
     def forward(
         self,
-        reconstruction: torch.Tensor,
+        reconstruction: torch.Tensor | list[tuple[torch.Tensor, torch.Tensor]],
         target: torch.Tensor,
         feature_maps: list | None = None,
     ) -> torch.Tensor:
         del feature_maps
-        mse_loss = self.mse(reconstruction, target)
+        if isinstance(reconstruction, list):
+            if not reconstruction:
+                raise ValueError("local reconstruction pairs must not be empty.")
+            mse_loss = reconstruction[0][0].new_zeros(())
+            for local_reconstruction, local_target in reconstruction:
+                mse_loss = mse_loss + self.mse(local_reconstruction, local_target.detach())
+        else:
+            mse_loss = self.mse(reconstruction, target)
+
         self.last_mse_loss = mse_loss.detach()
-        self.last_corr_total = reconstruction.new_zeros(()).detach()
+        self.last_corr_total = (
+            reconstruction[0][0].new_zeros(()) if isinstance(reconstruction, list) else reconstruction.new_zeros(())
+        ).detach()
         self.last_corr_by_layer = {}
         return mse_loss
 
@@ -272,6 +311,10 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
     training_mode = cfg["training_mode"]
     loss_type = cfg["loss_type"]
 
+    if training_mode == "classification" and bool(cfg.get("local_training", False)):
+        return LocalClassificationReconstructionLoss(
+            reconstruction_strength=float(cfg.get("local_reconstruction_strength", 1.0)),
+        )
     if training_mode == "classification" and loss_type == "regular":
         return ClassificationLoss()
     if training_mode == "classification" and loss_type == "redundancy":
@@ -285,6 +328,8 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
             correlation_loss=cfg["correlation_loss"],
             local=bool(cfg.get("local", False)),
         )
+    if training_mode == "reconstruction" and bool(cfg.get("local_training", False)):
+        return ReconstructionLoss()
     if training_mode == "reconstruction" and loss_type == "regular":
         return ReconstructionLoss()
     if training_mode == "reconstruction" and loss_type == "redundancy":
@@ -302,4 +347,3 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
         "Expected training_mode in {'classification', 'reconstruction'} "
         "and loss_type in {'regular', 'redundancy'}."
     )
-

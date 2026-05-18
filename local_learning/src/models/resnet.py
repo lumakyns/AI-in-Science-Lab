@@ -14,6 +14,7 @@ class TorchvisionResNet18(LayerCaptureMixin, nn.Module):
         freeze_backbone: bool = False,
         inference_mode: bool = False,
     ) -> None:
+        """Wrap torchvision ResNet-18 with optional pretrained frozen features and capture hooks."""
         super().__init__()
         self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
@@ -49,12 +50,15 @@ class TorchvisionResNet18(LayerCaptureMixin, nn.Module):
         self._register_capture_hooks()
 
     def _register_capture_hooks(self) -> None:
+        """Attach forward hooks to selected ResNet modules for logging feature maps."""
         for name, module in self.model.named_modules():
             if name in self._hook_names:
                 self._hook_handles.append(module.register_forward_hook(self._make_capture_hook(name)))
 
     def _make_capture_hook(self, name: str):
+        """Create a hook that records tensor outputs and exposes 4D maps for losses."""
         def hook(_module, _inputs, output) -> None:
+            """Save the hooked module output when it is a tensor."""
             if isinstance(output, torch.Tensor):
                 self._save_layer_output(f"resnet18.{name}", output)
                 if output.ndim == 4 and name not in {"maxpool"}:
@@ -63,6 +67,7 @@ class TorchvisionResNet18(LayerCaptureMixin, nn.Module):
         return hook
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, list[FeatureMapEntry | tuple[str, torch.Tensor]]]:
+        """Run ResNet-18 and return logits plus the hook-collected feature maps."""
         self._reset_layer_outputs()
         self._forward_feature_maps = []
         logits = self.model(x)

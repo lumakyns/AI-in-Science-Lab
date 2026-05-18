@@ -15,8 +15,8 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         total_epochs: int = 1,
         dataset_size: int = 1,
         a: float = 1.0,
-        inference_mode: bool = False,
     ) -> None:
+        """Create one convolutional WTA autoencoder block with configurable sparsity."""
         super().__init__()
 
         if k_lifetime is not None and k_population is not None:
@@ -24,7 +24,6 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         if k_lifetime is None and k_population is None:
             raise ValueError("Specify one of k_lifetime or k_population.")
 
-        self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
         self.in_ch, self.in_h, self.in_w = dim
         self.hidden_ch = int(hidden_ch)
@@ -44,10 +43,12 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
 
     @property
     def detached_encoder_weights(self) -> torch.Tensor:
+        """Return encoder weights detached from the gradient graph."""
         return self.encoder.weight.detach()
 
     @property
     def detached_decoder_weights(self) -> torch.Tensor:
+        """Return decoder weights detached from the gradient graph."""
         return self.decoder.weight.detach()
 
     def _compute_annealed_k(
@@ -57,6 +58,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         target_k: float,
         training: bool,
     ) -> float:
+        """Anneal the active population count from all channels toward the target count."""
         if not training:
             return self.a * target_k
 
@@ -67,6 +69,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         return start_k + progress * (target_k - start_k)
 
     def _apply_population_sparsity(self, activations: torch.Tensor, k: float) -> torch.Tensor:
+        """Keep the top-k channels per sample by summed spatial activation."""
         batch_size, channels, _, _ = activations.shape
         k_count = min(max(1, int(k)), channels)
         scores = activations.view(batch_size, channels, -1).sum(dim=2)
@@ -79,6 +82,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         return sparse
 
     def _apply_spatial_sparsity(self, activations: torch.Tensor) -> torch.Tensor:
+        """Keep the strongest spatial positions independently within each channel."""
         batch_size, channels, height, width = activations.shape
         k_count = max(1, int(self.k_spatial * height * width))
         k_count = min(k_count, height * width)
@@ -89,6 +93,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         return activations * mask.view(batch_size, channels, height, width)
 
     def _apply_lifetime_sparsity(self, activations: torch.Tensor) -> torch.Tensor:
+        """Keep the strongest activations across channels and spatial positions per sample."""
         if self.k_lifetime is None:
             raise RuntimeError("k_lifetime is required when population sparsity is disabled.")
 
@@ -110,6 +115,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         epoch: int = 0,
         inputs_processed_in_epoch: int = 0,
     ) -> tuple[torch.Tensor, list[tuple[str, torch.Tensor]]]:
+        """Encode X_l, sparsify B_l, decode XBar_l, and return the sparse code."""
         self._reset_layer_outputs()
         if x.ndim == 2:
             x = x.view(x.shape[0], self.in_ch, self.in_h, self.in_w)
@@ -140,4 +146,3 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         reconstruction = self.decoder(h1)
         self._save_layer_output("wta_conv_ae.decoder", reconstruction)
         return reconstruction, [("wta_conv_ae.hidden", h1)]
-

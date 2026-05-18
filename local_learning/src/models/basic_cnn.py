@@ -14,6 +14,7 @@ class BasicCNN1(LayerCaptureMixin, nn.Module):
         width: int = 32,
         inference_mode: bool = False,
     ) -> None:
+        """Create a compact pooled CNN and its captureable convolution blocks."""
         super().__init__()
         self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
@@ -31,6 +32,7 @@ class BasicCNN1(LayerCaptureMixin, nn.Module):
         self.fc = nn.Linear(width * 2, num_classes)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, list[FeatureMapEntry]]:
+        """Run three conv blocks, pool to logits, and return conv feature entries."""
         self._reset_layer_outputs()
         convs: list[FeatureMapEntry] = []
 
@@ -75,6 +77,7 @@ class BasicCNN2(LayerCaptureMixin, nn.Module):
         width: int = 32,
         inference_mode: bool = False,
     ) -> None:
+        """Create a compact unpooled CNN and its captureable convolution blocks."""
         super().__init__()
         self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
@@ -91,6 +94,7 @@ class BasicCNN2(LayerCaptureMixin, nn.Module):
         self.fc = nn.Linear(width * 2, num_classes)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, list[FeatureMapEntry]]:
+        """Run three stride-preserving conv blocks, pool to logits, and return conv feature entries."""
         self._reset_layer_outputs()
         convs: list[FeatureMapEntry] = []
 
@@ -121,4 +125,3 @@ class BasicCNN2(LayerCaptureMixin, nn.Module):
         logits = self.fc(x)
         self._save_layer_output("cnn2.fc", logits)
         return logits, convs
-

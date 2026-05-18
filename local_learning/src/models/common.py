@@ -12,18 +12,20 @@ class FeatureMapEntry(NamedTuple):
 
 
 class LayerCaptureMixin:
-    inference_mode: bool
     layer_outputs: dict[str, torch.Tensor] | None
 
     def _reset_layer_outputs(self) -> None:
-        self.layer_outputs = {} if self.inference_mode else None
+        """Enable layer capture only while PyTorch inference mode is active."""
+        self.layer_outputs = {} if torch.is_inference_mode_enabled() else None
 
     def _save_layer_output(self, name: str, output: torch.Tensor) -> None:
+        """Store a detached CPU copy of a layer output when capture is enabled."""
         if self.layer_outputs is not None:
             self.layer_outputs[name] = output.detach().cpu()
 
 
 def get_num_classes(dataset: str) -> int:
+    """Map supported dataset names to their classifier output widths."""
     match dataset:
         case "cifar10":
             return 10
@@ -34,7 +36,9 @@ def get_num_classes(dataset: str) -> int:
 
 
 def get_model(cfg: dict[str, Any]) -> nn.Module:
+    """Build the requested model from the experiment config dictionary."""
     from .basic_cnn import BasicCNN1, BasicCNN2
+    from .greedy_stacked_autoencoder import GreedyStackedAutoencoder
     from .resnet import TorchvisionResNet18
     from .wta_conv_ae import WTA_CONV_AE
 
@@ -71,7 +75,20 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 total_epochs=int(cfg["epochs"]),
                 dataset_size=int(cfg.get("dataset_size", 1)),
                 a=float(cfg.get("wta_eval_multiplier", 1.0)),
-                inference_mode=inference_mode,
+            )
+        case "greedy_stacked_autoencoder":
+            return GreedyStackedAutoencoder(
+                dim=(3, 32, 32),
+                hidden_channels=cfg.get("hidden_channels", cfg.get("hidden_ch", 64)),
+                num_classes=num_classes if cfg["training_mode"] == "classification" else None,
+                num_layers=int(cfg.get("num_layers", cfg.get("depth", 2))),
+                k_spatial=float(cfg["k_spatial"]),
+                k_population=cfg.get("k_population"),
+                k_lifetime=cfg.get("k_lifetime"),
+                total_epochs=int(cfg["epochs"]),
+                dataset_size=int(cfg.get("dataset_size", 1)),
+                a=float(cfg.get("wta_eval_multiplier", 1.0)),
+                local_training=bool(cfg.get("local_training", False)),
             )
         case _:
             raise ValueError(f"Unknown architecture_type={architecture_type!r}.")
