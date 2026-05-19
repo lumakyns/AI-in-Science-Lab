@@ -77,18 +77,27 @@ def _channel_values(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def _kde_curve(values: torch.Tensor, *, points: int = 64) -> tuple[list[float], list[float]]:
-    """Estimate a simple Gaussian KDE over a 1D tensor of values."""
+    """Estimate a Gaussian KDE over a 1D tensor of values."""
     vals = values.detach().to(torch.float32).flatten().cpu()
-    if vals.numel() == 0:
+    vals = vals[torch.isfinite(vals)]
+    if vals.numel() == 0 or points <= 0:
         return [], []
-    if vals.numel() == 1 or float(vals.std(unbiased=False)) == 0.0:
-        center = float(vals.mean())
-        return [center], [1.0]
 
     std = vals.std(unbiased=False)
-    bandwidth = 1.06 * std * (vals.numel() ** -0.2)
-    bandwidth = torch.clamp(bandwidth, min=torch.tensor(1e-6))
-    xs = torch.linspace(float(vals.amin()), float(vals.amax()), points)
+    if vals.numel() == 1 or float(std) == 0.0:
+        scale = torch.clamp(vals.abs().mean() * 1e-3, min=torch.tensor(1e-6))
+        bandwidth = scale
+    else:
+        bandwidth = 1.06 * std * (vals.numel() ** -0.2)
+        bandwidth = torch.clamp(bandwidth, min=torch.tensor(1e-6))
+
+    center_min = vals.amin()
+    center_max = vals.amax()
+    xs = torch.linspace(
+        float(center_min - 3.0 * bandwidth),
+        float(center_max + 3.0 * bandwidth),
+        max(2, points),
+    )
     density = torch.exp(-0.5 * ((xs[:, None] - vals[None, :]) / bandwidth) ** 2)
     density = density.mean(dim=1) / (bandwidth * (2.0 * torch.pi) ** 0.5)
     return xs.tolist(), density.tolist()

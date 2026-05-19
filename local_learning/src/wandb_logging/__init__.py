@@ -1,4 +1,4 @@
-from .feature_maps import log_channel_stats
+from .feature_maps import ChannelActivationScatterLogger, log_channel_stats
 from .weights import (
     log_conv_gradient_channel_stats,
     log_conv_norm_kdes,

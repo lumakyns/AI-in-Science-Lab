@@ -9,6 +9,7 @@ from datasets import get_dataset
 from losses import get_loss
 from models import get_model
 from wandb_logging import (
+    ChannelActivationScatterLogger,
     log_conv_gradient_channel_stats,
     log_conv_norm_kdes,
     log_conv_weight_channel_stats,
@@ -193,10 +194,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     weight_log_every_steps = int(cfg.get("log_weight_grids_every_steps", log_every_steps))
     flop_log_every_steps = int(cfg.get("log_flops_every_steps", 0))
     eval_interval_steps = max(1, len(train_loader) // 4)
+    activation_scatter_logger = ChannelActivationScatterLogger(wandb)
 
     for epoch in tqdm(range(int(cfg["epochs"])), desc="Epochs"):
         model.train()
         inputs_processed_in_epoch = 0
+        activation_scatter_logger.reset()
 
         for step_in_epoch, (xb, yb) in enumerate(train_loader):
             xb = xb.to(device, non_blocking=True)
@@ -212,6 +215,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             )
 
             loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
+            activation_scatter_logger.update(feature_maps)
             loss.backward()
 
             if global_step % log_every_steps == 0:
@@ -256,6 +260,10 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 metrics = eval_model(epoch)
                 metrics.update({"General/epoch": epoch, "General/step": global_step})
                 wandb_log(metrics, step=global_step)
+
+        activation_scatter_payload = activation_scatter_logger.log_epoch(epoch=epoch)
+        if activation_scatter_payload:
+            wandb_log(activation_scatter_payload, step=global_step)
 
     metrics = eval_model(int(cfg["epochs"]) - 1)
     wandb.finish()
