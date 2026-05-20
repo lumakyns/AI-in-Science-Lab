@@ -12,7 +12,7 @@ class GreedyStackedAutoencoder(LayerCaptureMixin, nn.Module):
         hidden_channels: int | list[int] | tuple[int, ...] = 64,
         num_classes: int | None = None,
         num_layers: int = 2,
-        k_spatial: float = 0.2,
+        k_spatial: float | None = None,
         k_lifetime: float | None = 0.2,
         k_population: float | None = None,
         total_epochs: int = 1,

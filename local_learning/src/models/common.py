@@ -75,7 +75,7 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
             return WTA_CONV_AE(
                 dim=(3, 32, 32),
                 hidden_channels=_first_hidden_channel(cfg),
-                k_spatial=float(cfg["k_spatial"]),
+                k_spatial=cfg.get("k_spatial"),
                 k_population=cfg.get("k_population"),
                 k_lifetime=cfg.get("k_lifetime"),
                 total_epochs=int(cfg["epochs"]),
@@ -88,7 +88,7 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 hidden_channels=cfg["hidden_channels"],
                 num_classes=num_classes if cfg["training_mode"] == "classification" else None,
                 num_layers=int(cfg["num_layers"]),
-                k_spatial=float(cfg["k_spatial"]),
+                k_spatial=cfg.get("k_spatial"),
                 k_population=cfg.get("k_population"),
                 k_lifetime=cfg.get("k_lifetime"),
                 total_epochs=int(cfg["epochs"]),

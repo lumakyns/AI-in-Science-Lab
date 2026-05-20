@@ -9,7 +9,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         self,
         dim: tuple[int, int, int] = (3, 32, 32),
         hidden_channels: int = 64,
-        k_spatial: float = 0.2,
+        k_spatial: float | None = None,
         k_lifetime: float | None = 0.2,
         k_population: float | None = None,
         total_epochs: int = 1,
@@ -27,7 +27,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         self.layer_outputs = None
         self.in_ch, self.in_h, self.in_w = dim
         self.hidden_channels = int(hidden_channels)
-        self.k_spatial = float(k_spatial)
+        self.k_spatial = None if k_spatial is None else float(k_spatial)
         self.k_lifetime = k_lifetime
         self.k_population = k_population
         self.total_epochs = int(total_epochs)
@@ -131,8 +131,9 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         h1 = self.relu(z1)
         self._save_layer_output("wta_conv_ae.relu", h1)
 
-        h1 = self._apply_spatial_sparsity(h1)
-        self._save_layer_output("wta_conv_ae.spatial_wta", h1)
+        if self.k_spatial is not None:
+            h1 = self._apply_spatial_sparsity(h1)
+            self._save_layer_output("wta_conv_ae.spatial_wta", h1)
         if self.use_population_sparsity:
             if self.k_population is None:
                 raise RuntimeError("k_population is required when population sparsity is enabled.")
