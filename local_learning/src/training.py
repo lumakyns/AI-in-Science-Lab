@@ -10,6 +10,8 @@ from losses import get_loss
 from models import get_model
 from wandb_logging import (
     ChannelActivationScatterLogger,
+    ChannelActivationStatsLogger,
+    ConvWeightChangeLogger,
     log_conv_gradient_channel_stats,
     log_conv_norm_kdes,
     log_conv_weight_channel_stats,
@@ -60,23 +62,29 @@ def get_config_name(cfg: dict[str, Any]) -> str:
     )
 
 
-def _capitalize_top_folder(key: str) -> str:
-    """Capitalize the top WandB namespace while leaving nested names readable."""
-    if "/" not in key:
-        return key
-    top, rest = key.split("/", 1)
-    if not top:
-        return key
-    return f"{top[:1].upper()}{top[1:]}" + f"/{rest}"
+def configure_wandb_metrics(run: Any) -> None:
+    """Define stable default axes and summaries for W&B charts."""
+    run.define_metric("trainer/global_step")
+    run.define_metric("trainer/epoch")
+    run.define_metric("train/*", step_metric="trainer/global_step")
+    run.define_metric("test/*", step_metric="trainer/global_step")
+    run.define_metric("losses/*", step_metric="trainer/global_step")
+    run.define_metric("general/*", step_metric="trainer/global_step")
+    run.define_metric("weights/*", step_metric="trainer/global_step")
+    run.define_metric("gradients/*", step_metric="trainer/global_step")
+    run.define_metric("flops/*", step_metric="trainer/global_step")
+    run.define_metric("activations/*", step_metric="trainer/epoch")
+    run.define_metric("media/*", step_metric="trainer/global_step")
+    run.define_metric("train/loss", summary="min")
+    run.define_metric("test/loss", summary="min")
+    run.define_metric("test/acc", summary="max")
+    run.define_metric("test/mse", summary="min")
 
 
-def wandb_log(payload: dict[str, object], *, step: int | None = None) -> None:
-    """Log a payload to WandB after normalizing top-level folder names."""
-    payload = {_capitalize_top_folder(key): value for key, value in payload.items()}
-    if step is None:
-        wandb.log(payload)
-        return
-    wandb.log(payload, step=step)
+def wandb_log(run: Any, payload: dict[str, object]) -> None:
+    """Log one already-batched payload to W&B."""
+    if payload:
+        run.log(payload)
 
 
 def _loss_value(
@@ -100,22 +108,23 @@ def _metric_payload(cfg: dict[str, Any], criterion, output, yb: torch.Tensor) ->
     if cfg["training_mode"] == "classification":
         acc = (output.argmax(dim=1) == yb).to(torch.float32).mean()
         return {
-            "Losses/ce": float(getattr(criterion, "last_ce_loss", torch.tensor(0.0)).detach().cpu()),
-            "Losses/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
-            "General/acc": float(acc.detach().cpu()),
+            "losses/ce": float(getattr(criterion, "last_ce_loss", torch.tensor(0.0)).detach().cpu()),
+            "losses/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
+            "train/acc": float(acc.detach().cpu()),
         }
     return {
-        "Train/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
+        "train/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
     }
 
 
-def _log_loss_parts(criterion, payload: dict[str, float | int]) -> None:
+def _log_loss_parts(criterion, payload: dict[str, object]) -> None:
     """Append optional criterion sub-losses to an existing WandB payload."""
-    payload["Losses/correlation_total"] = float(
+    payload["losses/correlation_total"] = float(
         getattr(criterion, "last_corr_total", torch.tensor(0.0)).detach().cpu()
     )
     for layer_name, layer_loss in getattr(criterion, "last_corr_by_layer", {}).items():
-        payload[f"Losses/{layer_name}"] = float(layer_loss.detach().cpu())
+        safe_name = str(layer_name).replace(".", "__").replace("/", "__")
+        payload[f"losses/{safe_name}"] = float(layer_loss.detach().cpu())
 
 
 def _forward_model(
@@ -142,6 +151,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     run = wandb.init(project=config["project"], config=config)
     cfg = dict(wandb.config)
     run.name = get_config_name(cfg)
+    configure_wandb_metrics(run)
 
     train_loader, test_loader = get_loaders(cfg, device)
     cfg["dataset_size"] = len(train_loader.dataset)
@@ -182,11 +192,11 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     mse_sum += float(criterion.last_mse_loss.detach().cpu()) * batch_size
                 n += batch_size
         model.train()
-        metrics = {"Test/loss": loss_sum / max(1, n)}
+        metrics = {"test/loss": loss_sum / max(1, n)}
         if cfg["training_mode"] == "classification":
-            metrics["Test/acc"] = acc_sum / max(1, n)
+            metrics["test/acc"] = acc_sum / max(1, n)
         else:
-            metrics["Test/mse"] = mse_sum / max(1, n)
+            metrics["test/mse"] = mse_sum / max(1, n)
         return metrics
 
     global_step = 0
@@ -195,11 +205,18 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     flop_log_every_steps = int(cfg.get("log_flops_every_steps", 0))
     eval_interval_steps = max(1, len(train_loader) // 4)
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
+    activation_stats_logger = ChannelActivationStatsLogger(
+        zero_threshold=float(cfg.get("activation_zero_threshold", 1e-6)),
+        dead_active_fraction=float(cfg.get("activation_dead_active_fraction", 0.01)),
+        dominant_share_multiplier=float(cfg.get("activation_dominant_share_multiplier", 2.0)),
+    )
+    weight_change_logger = ConvWeightChangeLogger(model)
 
     for epoch in tqdm(range(int(cfg["epochs"])), desc="Epochs"):
         model.train()
         inputs_processed_in_epoch = 0
         activation_scatter_logger.reset()
+        activation_stats_logger.reset()
 
         for step_in_epoch, (xb, yb) in enumerate(train_loader):
             xb = xb.to(device, non_blocking=True)
@@ -216,27 +233,27 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
             loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
             activation_scatter_logger.update(feature_maps)
+            activation_stats_logger.update(feature_maps)
             loss.backward()
 
+            log_payload: dict[str, object] | None = None
             if global_step % log_every_steps == 0:
-                log_payload: dict[str, float | int] = {
-                    "Train/loss": float(loss.detach().cpu()),
-                    "General/epoch": epoch,
-                    "General/step": global_step,
+                log_payload = {
+                    "train/loss": float(loss.detach().cpu()),
+                    "trainer/epoch": epoch,
+                    "trainer/global_step": global_step,
+                    "trainer/step_in_epoch": step_in_epoch,
                 }
                 log_payload.update(_metric_payload(cfg, criterion, output, yb))
                 if hasattr(model, "last_k"):
-                    log_payload["General/last_k"] = int(model.last_k)
+                    log_payload["general/last_k"] = int(model.last_k)
                 _log_loss_parts(criterion, log_payload)
-                wandb_log(log_payload, step=global_step)
 
                 if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
-                    conv_payload = {}
-                    conv_payload.update(log_weight_filter_grids(model, wandb))
-                    conv_payload.update(log_conv_weight_channel_stats(model))
-                    conv_payload.update(log_conv_gradient_channel_stats(model))
-                    conv_payload.update(log_conv_norm_kdes(model, wandb))
-                    wandb_log(conv_payload, step=global_step)
+                    log_payload.update(log_weight_filter_grids(model, wandb))
+                    log_payload.update(log_conv_weight_channel_stats(model))
+                    log_payload.update(log_conv_gradient_channel_stats(model))
+                    log_payload.update(log_conv_norm_kdes(model, wandb))
 
                 if flop_log_every_steps > 0 and global_step % flop_log_every_steps == 0:
                     forward_kwargs = {}
@@ -245,12 +262,25 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                             "epoch": epoch,
                             "inputs_processed_in_epoch": inputs_processed_in_epoch,
                         }
-                    wandb_log(
-                        log_inference_flops(model, xb[:1], forward_kwargs=forward_kwargs),
-                        step=global_step,
+                    log_payload.update(
+                        log_inference_flops(model, xb[:1], forward_kwargs=forward_kwargs)
                     )
 
             optimizer.step()
+
+            if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
+                weight_change_payload = weight_change_logger.log(model)
+                if weight_change_payload:
+                    if log_payload is None:
+                        log_payload = {
+                            "trainer/epoch": epoch,
+                            "trainer/global_step": global_step,
+                            "trainer/step_in_epoch": step_in_epoch,
+                        }
+                    log_payload.update(weight_change_payload)
+
+            if log_payload is not None:
+                wandb_log(run, log_payload)
 
             batch_size = int(xb.shape[0])
             inputs_processed_in_epoch += batch_size
@@ -258,13 +288,19 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
             if (step_in_epoch + 1) % eval_interval_steps == 0:
                 metrics = eval_model(epoch)
-                metrics.update({"General/epoch": epoch, "General/step": global_step})
-                wandb_log(metrics, step=global_step)
+                metrics.update({"trainer/epoch": epoch, "trainer/global_step": global_step})
+                wandb_log(run, metrics)
 
         activation_scatter_payload = activation_scatter_logger.log_epoch(epoch=epoch)
-        if activation_scatter_payload:
-            wandb_log(activation_scatter_payload, step=global_step)
+        activation_stats_payload = activation_stats_logger.log_epoch()
+        epoch_payload = {
+            "trainer/epoch": epoch,
+            "trainer/global_step": global_step,
+        }
+        epoch_payload.update(activation_scatter_payload)
+        epoch_payload.update(activation_stats_payload)
+        wandb_log(run, epoch_payload)
 
     metrics = eval_model(int(cfg["epochs"]) - 1)
-    wandb.finish()
+    run.finish()
     return metrics
