@@ -12,11 +12,9 @@ class TorchvisionResNet18(LayerCaptureMixin, nn.Module):
         *,
         pretrained: bool = False,
         freeze_backbone: bool = False,
-        inference_mode: bool = False,
     ) -> None:
         """Wrap torchvision ResNet-18 with optional pretrained frozen features and capture hooks."""
         super().__init__()
-        self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
 
         weights = ResNet18_Weights.DEFAULT if pretrained else None

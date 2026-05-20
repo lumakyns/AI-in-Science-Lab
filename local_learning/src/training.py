@@ -11,12 +11,10 @@ from models import get_model
 from wandb_logging import (
     ChannelActivationScatterLogger,
     ChannelActivationStatsLogger,
+    ConvNormKDEHistoryLogger,
     ConvWeightChangeLogger,
-    log_conv_gradient_channel_stats,
-    log_conv_norm_kdes,
-    log_conv_weight_channel_stats,
+    log_conv_weight_snapshot,
     log_inference_flops,
-    log_weight_filter_grids,
 )
 
 
@@ -63,22 +61,8 @@ def get_config_name(cfg: dict[str, Any]) -> str:
 
 
 def configure_wandb_metrics(run: Any) -> None:
-    """Define stable default axes and summaries for W&B charts."""
-    run.define_metric("trainer/global_step")
-    run.define_metric("trainer/epoch")
-    run.define_metric("train/*", step_metric="trainer/global_step")
-    run.define_metric("test/*", step_metric="trainer/global_step")
-    run.define_metric("losses/*", step_metric="trainer/global_step")
-    run.define_metric("general/*", step_metric="trainer/global_step")
-    run.define_metric("weights/*", step_metric="trainer/global_step")
-    run.define_metric("gradients/*", step_metric="trainer/global_step")
-    run.define_metric("flops/*", step_metric="trainer/global_step")
-    run.define_metric("activations/*", step_metric="trainer/epoch")
-    run.define_metric("media/*", step_metric="trainer/global_step")
-    run.define_metric("train/loss", summary="min")
-    run.define_metric("test/loss", summary="min")
-    run.define_metric("test/acc", summary="max")
-    run.define_metric("test/mse", summary="min")
+    """Configure W&B without creating extra visible trainer metrics."""
+    del run
 
 
 def wandb_log(run: Any, payload: dict[str, object]) -> None:
@@ -105,16 +89,30 @@ def _loss_value(
 
 def _metric_payload(cfg: dict[str, Any], criterion, output, yb: torch.Tensor) -> dict[str, float]:
     """Build scalar train metrics from the current model output and criterion state."""
+    payload: dict[str, float] = {}
     if cfg["training_mode"] == "classification":
         acc = (output.argmax(dim=1) == yb).to(torch.float32).mean()
-        return {
-            "losses/ce": float(getattr(criterion, "last_ce_loss", torch.tensor(0.0)).detach().cpu()),
-            "losses/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
-            "train/acc": float(acc.detach().cpu()),
-        }
-    return {
-        "train/mse": float(getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()),
-    }
+        ce_loss = getattr(criterion, "last_ce_loss", torch.tensor(0.0))
+        payload.update(
+            {
+                "losses/ce": float(ce_loss.detach().cpu()),
+                "losses/final_layer_ce": float(ce_loss.detach().cpu()),
+                "losses/mse": float(
+                    getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()
+                ),
+                "train/acc": float(acc.detach().cpu()),
+            }
+        )
+    else:
+        payload["train/mse"] = float(
+            getattr(criterion, "last_mse_loss", torch.tensor(0.0)).detach().cpu()
+        )
+
+    for layer_name, layer_mse in getattr(criterion, "last_mse_by_layer", {}).items():
+        safe_name = str(layer_name).replace(".", "__").replace("/", "__")
+        payload[f"losses/autoencoder_mse/{safe_name}"] = float(layer_mse.detach().cpu())
+
+    return payload
 
 
 def _log_loss_parts(criterion, payload: dict[str, object]) -> None:
@@ -203,6 +201,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     log_every_steps = int(cfg["log_every_steps"])
     weight_log_every_steps = int(cfg.get("log_weight_grids_every_steps", log_every_steps))
     flop_log_every_steps = int(cfg.get("log_flops_every_steps", 0))
+    activation_viz_batches = max(0, int(cfg.get("log_activation_viz_batches", 1)))
     eval_interval_steps = max(1, len(train_loader) // 4)
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
     activation_stats_logger = ChannelActivationStatsLogger(
@@ -211,12 +210,43 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
         dominant_share_multiplier=float(cfg.get("activation_dominant_share_multiplier", 2.0)),
     )
     weight_change_logger = ConvWeightChangeLogger(model)
+    norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
+
+    def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
+        if activation_viz_batches == 0:
+            return {}
+
+        was_training = model.training
+        activation_scatter_logger.reset()
+        activation_stats_logger.reset()
+        model.eval()
+        with torch.no_grad():
+            for batch_idx, (xb, _yb) in enumerate(test_loader):
+                if batch_idx >= activation_viz_batches:
+                    break
+                xb = xb.to(device, non_blocking=True)
+                _output, feature_maps = _forward_model(
+                    cfg,
+                    model,
+                    xb,
+                    epoch=0 if isinstance(epoch, str) else epoch,
+                    inputs_processed_in_epoch=0,
+                )
+                activation_scatter_logger.update(feature_maps)
+                activation_stats_logger.update(feature_maps)
+
+        payload = {}
+        payload.update(activation_scatter_logger.log_epoch(epoch=epoch))
+        payload.update(activation_stats_logger.log_epoch())
+        if was_training:
+            model.train()
+        return payload
+
+    wandb_log(run, log_activation_viz_snapshot(epoch="initial"))
 
     for epoch in tqdm(range(int(cfg["epochs"])), desc="Epochs"):
         model.train()
         inputs_processed_in_epoch = 0
-        activation_scatter_logger.reset()
-        activation_stats_logger.reset()
 
         for step_in_epoch, (xb, yb) in enumerate(train_loader):
             xb = xb.to(device, non_blocking=True)
@@ -232,17 +262,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             )
 
             loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
-            activation_scatter_logger.update(feature_maps)
-            activation_stats_logger.update(feature_maps)
             loss.backward()
 
             log_payload: dict[str, object] | None = None
             if global_step % log_every_steps == 0:
                 log_payload = {
                     "train/loss": float(loss.detach().cpu()),
-                    "trainer/epoch": epoch,
-                    "trainer/global_step": global_step,
-                    "trainer/step_in_epoch": step_in_epoch,
                 }
                 log_payload.update(_metric_payload(cfg, criterion, output, yb))
                 if hasattr(model, "last_k"):
@@ -250,10 +275,14 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 _log_loss_parts(criterion, log_payload)
 
                 if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
-                    log_payload.update(log_weight_filter_grids(model, wandb))
-                    log_payload.update(log_conv_weight_channel_stats(model))
-                    log_payload.update(log_conv_gradient_channel_stats(model))
-                    log_payload.update(log_conv_norm_kdes(model, wandb))
+                    log_payload.update(
+                        log_conv_weight_snapshot(
+                            model,
+                            wandb,
+                            norm_kde_history_logger,
+                            step=global_step,
+                        )
+                    )
 
                 if flop_log_every_steps > 0 and global_step % flop_log_every_steps == 0:
                     forward_kwargs = {}
@@ -272,11 +301,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 weight_change_payload = weight_change_logger.log(model)
                 if weight_change_payload:
                     if log_payload is None:
-                        log_payload = {
-                            "trainer/epoch": epoch,
-                            "trainer/global_step": global_step,
-                            "trainer/step_in_epoch": step_in_epoch,
-                        }
+                        log_payload = {}
                     log_payload.update(weight_change_payload)
 
             if log_payload is not None:
@@ -288,18 +313,9 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
             if (step_in_epoch + 1) % eval_interval_steps == 0:
                 metrics = eval_model(epoch)
-                metrics.update({"trainer/epoch": epoch, "trainer/global_step": global_step})
                 wandb_log(run, metrics)
 
-        activation_scatter_payload = activation_scatter_logger.log_epoch(epoch=epoch)
-        activation_stats_payload = activation_stats_logger.log_epoch()
-        epoch_payload = {
-            "trainer/epoch": epoch,
-            "trainer/global_step": global_step,
-        }
-        epoch_payload.update(activation_scatter_payload)
-        epoch_payload.update(activation_stats_payload)
-        wandb_log(run, epoch_payload)
+        wandb_log(run, log_activation_viz_snapshot(epoch=epoch))
 
     metrics = eval_model(int(cfg["epochs"]) - 1)
     run.finish()

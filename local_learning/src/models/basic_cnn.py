@@ -12,11 +12,9 @@ class BasicCNN1(LayerCaptureMixin, nn.Module):
         in_ch: int = 3,
         num_classes: int = 10,
         width: int = 32,
-        inference_mode: bool = False,
     ) -> None:
         """Create a compact pooled CNN and its captureable convolution blocks."""
         super().__init__()
-        self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
 
         self.conv1 = nn.Conv2d(in_ch, width, kernel_size=3, stride=1, padding=1, bias=False)
@@ -75,11 +73,9 @@ class BasicCNN2(LayerCaptureMixin, nn.Module):
         in_ch: int = 3,
         num_classes: int = 10,
         width: int = 32,
-        inference_mode: bool = False,
     ) -> None:
         """Create a compact unpooled CNN and its captureable convolution blocks."""
         super().__init__()
-        self.inference_mode = bool(inference_mode)
         self.layer_outputs = None
 
         self.conv1 = nn.Conv2d(in_ch, width, kernel_size=3, stride=1, padding=1, bias=False)

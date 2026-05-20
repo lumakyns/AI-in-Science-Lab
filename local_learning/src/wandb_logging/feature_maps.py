@@ -18,29 +18,18 @@ def _parse_feature_map(feature_map_item, *, idx: int) -> tuple[str, torch.Tensor
     )
 
 
-def log_channel_stats(feature_maps: list) -> dict[str, torch.Tensor]:
-    stats: dict[str, torch.Tensor] = {}
-
-    for idx, feature_map_item in enumerate(feature_maps):
-        layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
-        if feature_map.ndim != 4:
-            raise ValueError(
-                f"Expected feature map {layer_name!r} to have shape [B, C, H, W], "
-                f"got {tuple(feature_map.shape)}."
-            )
-
-        fmap = feature_map.detach()
-        safe_name = layer_name.replace(".", "__").replace("/", "__")
-        stats[f"activations/mean_{safe_name}"] = fmap.mean(dim=(0, 2, 3)).cpu()
-        stats[f"activations/min_{safe_name}"] = fmap.amin(dim=(0, 2, 3)).cpu()
-        stats[f"activations/max_{safe_name}"] = fmap.amax(dim=(0, 2, 3)).cpu()
-        stats[f"activations/variance_{safe_name}"] = fmap.var(dim=(0, 2, 3), unbiased=False).cpu()
-
-    return stats
-
-
 def _safe_layer_name(layer_name: str) -> str:
     return layer_name.replace(".", "__").replace("/", "__")
+
+
+def _mean_channel_distance_to_geometric_mean(feature_map: torch.Tensor) -> torch.Tensor:
+    """Measure how far layer channels are, on average, from the channel centroid."""
+    channel_vectors = feature_map.to(torch.float32).permute(1, 0, 2, 3).flatten(start_dim=1)
+    if channel_vectors.numel() == 0:
+        return torch.tensor(0.0)
+
+    geometric_mean = channel_vectors.mean(dim=0, keepdim=True)
+    return (channel_vectors - geometric_mean).norm(dim=1).mean().cpu()
 
 
 class ChannelActivationStatsLogger:
@@ -49,10 +38,14 @@ class ChannelActivationStatsLogger:
     def __init__(
         self,
         *,
+        prefix: str = "viz-test-activation-epoch",
+        distance_prefix: str = "viz-test-activation-geometric-mean-distance",
         zero_threshold: float = 1e-6,
         dead_active_fraction: float = 0.01,
         dominant_share_multiplier: float = 2.0,
     ) -> None:
+        self.prefix = prefix
+        self.distance_prefix = distance_prefix
         self.zero_threshold = zero_threshold
         self.dead_active_fraction = dead_active_fraction
         self.dominant_share_multiplier = dominant_share_multiplier
@@ -72,18 +65,23 @@ class ChannelActivationStatsLogger:
                 fmap.shape[0] * fmap.shape[2] * fmap.shape[3],
             )
             activation_mass = fmap.abs().sum(dim=reduce_dims).cpu()
+            mean_geometric_distance = _mean_channel_distance_to_geometric_mean(fmap)
 
             if layer_name not in self._stats:
                 self._stats[layer_name] = {
                     "zero_count": zero_count,
                     "total_count": total_count,
                     "activation_mass": activation_mass,
+                    "geometric_distance_sum": mean_geometric_distance,
+                    "geometric_distance_count": torch.tensor(1),
                 }
                 continue
 
             self._stats[layer_name]["zero_count"] += zero_count
             self._stats[layer_name]["total_count"] += total_count
             self._stats[layer_name]["activation_mass"] += activation_mass
+            self._stats[layer_name]["geometric_distance_sum"] += mean_geometric_distance
+            self._stats[layer_name]["geometric_distance_count"] += 1
 
     def log_epoch(self) -> dict[str, torch.Tensor | int | float]:
         payload: dict[str, torch.Tensor | int | float] = {}
@@ -93,6 +91,9 @@ class ChannelActivationStatsLogger:
             zero_count = stats["zero_count"]
             total_count = stats["total_count"].clamp_min(1)
             activation_mass = stats["activation_mass"]
+            mean_geometric_distance = stats["geometric_distance_sum"] / stats[
+                "geometric_distance_count"
+            ].clamp_min(1)
 
             sparsity = zero_count / total_count
             active_fraction = 1.0 - sparsity
@@ -107,13 +108,14 @@ class ChannelActivationStatsLogger:
             dead_channels = active_fraction <= self.dead_active_fraction
             dominant_channels = mass_share >= dominant_threshold
 
-            payload[f"activations/sparsity_{safe_name}"] = sparsity
-            payload[f"activations/active_fraction_{safe_name}"] = active_fraction
-            payload[f"activations/dead_channels_{safe_name}"] = int(dead_channels.sum())
-            payload[f"activations/dominant_channels_{safe_name}"] = int(dominant_channels.sum())
-            payload[f"activations/dominant_mass_share_{safe_name}"] = float(
+            payload[f"{self.prefix}-sparsity/{safe_name}"] = sparsity
+            payload[f"{self.prefix}-active-fraction/{safe_name}"] = active_fraction
+            payload[f"{self.prefix}-dead-channels/{safe_name}"] = int(dead_channels.sum())
+            payload[f"{self.prefix}-dominant-channels/{safe_name}"] = int(dominant_channels.sum())
+            payload[f"{self.prefix}-dominant-mass-share/{safe_name}"] = float(
                 mass_share[dominant_channels].sum()
             )
+            payload[f"{self.distance_prefix}/{safe_name}"] = float(mean_geometric_distance)
 
         self.reset()
         return payload
@@ -182,75 +184,123 @@ def _draw_scatter_cell(
         image[:, y_slice, x_slice] = point_color[:, None, None]
 
 
-def _make_channel_scatter_grid(
-    activations: torch.Tensor,
+def _sample_channel_pairs(
+    channel_count: int,
     *,
+    max_pairs: int,
+    seed: int,
+) -> list[tuple[int, int]]:
+    pair_count = (channel_count * (channel_count - 1)) // 2
+    if pair_count <= max_pairs:
+        return [(a, b) for a in range(channel_count) for b in range(a + 1, channel_count)]
+
+    generator = torch.Generator().manual_seed(int(seed))
+    pairs: set[tuple[int, int]] = set()
+    while len(pairs) < max_pairs:
+        sampled = torch.randint(channel_count, (max_pairs * 4, 2), generator=generator)
+        for channel_a, channel_b in sampled.tolist():
+            if channel_a == channel_b:
+                continue
+            if channel_a > channel_b:
+                channel_a, channel_b = channel_b, channel_a
+            pairs.add((channel_a, channel_b))
+            if len(pairs) == max_pairs:
+                break
+
+    return sorted(pairs)
+
+
+def _make_sampled_channel_pair_scatter_grid(
+    channel_means: torch.Tensor,
+    *,
+    seed: int,
+    grid_size: int = 5,
     cell_size: int = 72,
     padding: int = 8,
-) -> torch.Tensor:
-    channel_count = int(activations.shape[1])
-    if channel_count < 2:
+) -> tuple[torch.Tensor, list[tuple[int, int]]]:
+    if channel_means.ndim != 2 or channel_means.shape[1] < 2:
         raise ValueError("Cannot build a scatter grid with fewer than two channels.")
 
-    grid_size = channel_count - 1
+    max_pairs = grid_size * grid_size
+    pairs = _sample_channel_pairs(
+        int(channel_means.shape[1]),
+        max_pairs=max_pairs,
+        seed=seed,
+    )
     image = torch.ones(
         3,
         grid_size * cell_size,
         grid_size * cell_size,
         dtype=torch.float32,
     )
-    for channel_a in range(channel_count):
-        for channel_b in range(channel_a + 1, channel_count):
-            _draw_scatter_cell(
-                image,
-                row=channel_b - 1,
-                col=channel_a,
-                x=activations[:, channel_a],
-                y=activations[:, channel_b],
-                cell_size=cell_size,
-                padding=padding,
-            )
 
-    return image
+    for idx, (channel_a, channel_b) in enumerate(pairs):
+        _draw_scatter_cell(
+            image,
+            row=idx // grid_size,
+            col=idx % grid_size,
+            x=channel_means[:, channel_a],
+            y=channel_means[:, channel_b],
+            cell_size=cell_size,
+            padding=padding,
+        )
+
+    return image, pairs
+
+
+def _scatter_seed(layer_name: str, epoch: int | str) -> int:
+    seed_text = f"{layer_name}:{epoch}"
+    return sum((idx + 1) * ord(char) for idx, char in enumerate(seed_text)) % (2**31)
 
 
 class ChannelActivationScatterLogger:
-    """Collect per-image channel means and build one scatter-grid image per layer."""
+    """Collect image-level channel means and build sampled channel-pair scatters."""
 
-    def __init__(self, wandb_module: Any, *, prefix: str = "activation_channel_scatter") -> None:
+    def __init__(
+        self,
+        wandb_module: Any,
+        *,
+        prefix: str = "viz-test-activation-channel-pair-scatter",
+        max_points: int = 256,
+    ) -> None:
         self.wandb = wandb_module
         self.prefix = prefix
+        self.max_points = max(1, int(max_points))
         self._layer_batches: dict[str, list[torch.Tensor]] = {}
 
     def update(self, feature_maps: list) -> None:
         """Store each image's mean activation per channel for the current batch."""
         for idx, feature_map_item in enumerate(feature_maps):
             layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
-            if feature_map.ndim != 4:
+            if feature_map.ndim != 4 or feature_map.shape[1] < 2:
                 continue
             channel_means = feature_map.detach().to(torch.float32).mean(dim=(2, 3)).cpu()
             self._layer_batches.setdefault(layer_name, []).append(channel_means)
 
-    def log_epoch(self, *, epoch: int) -> dict[str, Any]:
-        """Return one WandB image per layer containing all channel-pair scatter plots."""
+    def log_epoch(self, *, epoch: int | str) -> dict[str, Any]:
+        """Return one sampled 5x5 channel-pair scatter grid per layer."""
         payload: dict[str, Any] = {}
 
         for layer_name, batches in self._layer_batches.items():
             if not batches:
                 continue
 
-            activations = torch.cat(batches, dim=0)
-            if activations.ndim != 2 or activations.shape[0] == 0 or activations.shape[1] < 2:
+            channel_means = torch.cat(batches, dim=0)
+            if channel_means.shape[0] == 0:
                 continue
 
+            channel_means = channel_means[: self.max_points]
             safe_name = _safe_layer_name(layer_name)
-            scatter_grid = _make_channel_scatter_grid(activations)
-            image = scatter_grid.permute(1, 2, 0).numpy()
-            payload[f"media/{self.prefix}_{safe_name}"] = self.wandb.Image(
+            scatter, pairs = _make_sampled_channel_pair_scatter_grid(
+                channel_means,
+                seed=_scatter_seed(safe_name, epoch),
+            )
+            image = scatter.permute(1, 2, 0).numpy()
+            payload[f"{self.prefix}/{safe_name}"] = self.wandb.Image(
                 image,
                 caption=(
-                    f"{safe_name} epoch {epoch}: all channel mean scatter plots "
-                    f"({activations.shape[1]} channels)"
+                    f"{safe_name} epoch {epoch}: sampled {len(pairs)} channel-pair "
+                    "activation scatters on a 5x5 grid"
                 ),
             )
 

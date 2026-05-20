@@ -8,7 +8,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
     def __init__(
         self,
         dim: tuple[int, int, int] = (3, 32, 32),
-        hidden_ch: int = 64,
+        hidden_channels: int = 64,
         k_spatial: float = 0.2,
         k_lifetime: float | None = 0.2,
         k_population: float | None = None,
@@ -26,7 +26,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
 
         self.layer_outputs = None
         self.in_ch, self.in_h, self.in_w = dim
-        self.hidden_ch = int(hidden_ch)
+        self.hidden_channels = int(hidden_channels)
         self.k_spatial = float(k_spatial)
         self.k_lifetime = k_lifetime
         self.k_population = k_population
@@ -37,8 +37,14 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         self.use_population_sparsity = k_population is not None
         self.is_convolutional = True
 
-        self.encoder = nn.Conv2d(self.in_ch, self.hidden_ch, kernel_size=5, padding=2, bias=False)
-        self.decoder = nn.ConvTranspose2d(self.hidden_ch, self.in_ch, kernel_size=11, padding=5, bias=False)
+        self.encoder = nn.Conv2d(self.in_ch, self.hidden_channels, kernel_size=5, padding=2, bias=False)
+        self.decoder = nn.ConvTranspose2d(
+            self.hidden_channels,
+            self.in_ch,
+            kernel_size=11,
+            padding=5,
+            bias=False,
+        )
         self.relu = nn.ReLU()
 
     @property
@@ -65,7 +71,7 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         current_samples = epoch * self.dataset_size + inputs_processed_in_epoch
         anneal_samples = (self.total_epochs // 2) * self.dataset_size
         progress = min(current_samples / anneal_samples, 1.0) if anneal_samples > 0 else 1.0
-        start_k = float(self.hidden_ch)
+        start_k = float(self.hidden_channels)
         return start_k + progress * (target_k - start_k)
 
     def _apply_population_sparsity(self, activations: torch.Tensor, k: float) -> torch.Tensor:
@@ -130,14 +136,14 @@ class WTA_CONV_AE(LayerCaptureMixin, nn.Module):
         if self.use_population_sparsity:
             if self.k_population is None:
                 raise RuntimeError("k_population is required when population sparsity is enabled.")
-            target_k = self.k_population * self.hidden_ch
+            target_k = self.k_population * self.hidden_channels
             current_k = self._compute_annealed_k(
                 epoch=epoch,
                 inputs_processed_in_epoch=inputs_processed_in_epoch,
                 target_k=float(target_k),
                 training=self.training,
             )
-            self.last_k = min(max(1, int(current_k)), self.hidden_ch)
+            self.last_k = min(max(1, int(current_k)), self.hidden_channels)
             h1 = self._apply_population_sparsity(h1, current_k)
         else:
             h1 = self._apply_lifetime_sparsity(h1)

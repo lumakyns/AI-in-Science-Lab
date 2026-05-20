@@ -52,11 +52,11 @@ class GreedyStackedAutoencoder(LayerCaptureMixin, nn.Module):
 
         layers: list[WTA_CONV_AE] = []
         in_ch = self.in_ch
-        for hidden_ch in layer_channels:
+        for hidden_width in layer_channels:
             layers.append(
                 WTA_CONV_AE(
                     dim=(in_ch, self.in_h, self.in_w),
-                    hidden_ch=hidden_ch,
+                    hidden_channels=hidden_width,
                     k_spatial=k_spatial,
                     k_lifetime=k_lifetime,
                     k_population=k_population,
@@ -65,7 +65,7 @@ class GreedyStackedAutoencoder(LayerCaptureMixin, nn.Module):
                     a=a,
                 )
             )
-            in_ch = hidden_ch
+            in_ch = hidden_width
         self.layers = nn.ModuleList(layers)
 
     @property

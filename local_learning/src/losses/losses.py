@@ -112,6 +112,7 @@ class ClassificationLoss(nn.Module):
         self.last_ce_loss = torch.tensor(0.0)
         self.last_corr_total = torch.tensor(0.0)
         self.last_corr_by_layer: dict[str, torch.Tensor] = {}
+        self.last_mse_by_layer: dict[str, torch.Tensor] = {}
 
     def forward(self, y: torch.Tensor, y_pred: torch.Tensor, fm_list: list | None = None) -> torch.Tensor:
         del fm_list
@@ -119,6 +120,7 @@ class ClassificationLoss(nn.Module):
         self.last_ce_loss = ce_loss.detach()
         self.last_corr_total = y_pred.new_zeros(()).detach()
         self.last_corr_by_layer = {}
+        self.last_mse_by_layer = {}
         return ce_loss
 
 
@@ -130,22 +132,27 @@ class LocalClassificationReconstructionLoss(nn.Module):
         self.mse = nn.MSELoss()
         self.last_ce_loss = torch.tensor(0.0)
         self.last_mse_loss = torch.tensor(0.0)
+        self.last_mse_by_layer: dict[str, torch.Tensor] = {}
         self.last_corr_total = torch.tensor(0.0)
         self.last_corr_by_layer: dict[str, torch.Tensor] = {}
 
     def forward(self, y: torch.Tensor, y_pred: torch.Tensor, fm_list: list | None = None) -> torch.Tensor:
         ce_loss = self.ce(y_pred, y)
         mse_loss = y_pred.new_zeros(())
+        mse_by_layer: dict[str, torch.Tensor] = {}
 
         for item in fm_list or []:
             if not (isinstance(item, (tuple, list)) and len(item) == 3 and isinstance(item[0], str)):
                 continue
             name, reconstruction, target = item
             if name.endswith(".reconstruction"):
-                mse_loss = mse_loss + self.mse(reconstruction, target.detach())
+                layer_mse = self.mse(reconstruction, target.detach())
+                mse_loss = mse_loss + layer_mse
+                mse_by_layer[name.removesuffix(".reconstruction")] = layer_mse.detach()
 
         self.last_ce_loss = ce_loss.detach()
         self.last_mse_loss = mse_loss.detach()
+        self.last_mse_by_layer = mse_by_layer
         self.last_corr_total = y_pred.new_zeros(()).detach()
         self.last_corr_by_layer = {}
         return ce_loss + (self.reconstruction_strength * mse_loss)
@@ -183,6 +190,7 @@ class RedundancyLoss(CorrelationRedundancy, nn.Module):
         self.last_ce_loss = torch.tensor(0.0)
         self.last_corr_total = torch.tensor(0.0)
         self.last_corr_by_layer: dict[str, torch.Tensor] = {}
+        self.last_mse_by_layer: dict[str, torch.Tensor] = {}
 
     def forward(self, y: torch.Tensor, y_pred: torch.Tensor, fm_list: list | None = None) -> torch.Tensor:
         ce_loss = self.ce(y_pred, y)
@@ -211,6 +219,7 @@ class RedundancyLoss(CorrelationRedundancy, nn.Module):
         self.last_ce_loss = ce_loss.detach()
         self.last_corr_total = corr_total.detach()
         self.last_corr_by_layer = corr_by_layer
+        self.last_mse_by_layer = {}
         return ce_loss + (self.lambda_strength * corr_total)
 
 
@@ -219,6 +228,7 @@ class ReconstructionLoss(nn.Module):
         super().__init__()
         self.mse = nn.MSELoss()
         self.last_mse_loss = torch.tensor(0.0)
+        self.last_mse_by_layer: dict[str, torch.Tensor] = {}
         self.last_corr_total = torch.tensor(0.0)
         self.last_corr_by_layer: dict[str, torch.Tensor] = {}
 
@@ -233,12 +243,17 @@ class ReconstructionLoss(nn.Module):
             if not reconstruction:
                 raise ValueError("local reconstruction pairs must not be empty.")
             mse_loss = reconstruction[0][0].new_zeros(())
-            for local_reconstruction, local_target in reconstruction:
-                mse_loss = mse_loss + self.mse(local_reconstruction, local_target.detach())
+            mse_by_layer: dict[str, torch.Tensor] = {}
+            for layer_idx, (local_reconstruction, local_target) in enumerate(reconstruction):
+                layer_mse = self.mse(local_reconstruction, local_target.detach())
+                mse_loss = mse_loss + layer_mse
+                mse_by_layer[f"autoencoder_layer_{layer_idx}"] = layer_mse.detach()
         else:
             mse_loss = self.mse(reconstruction, target)
+            mse_by_layer = {"reconstruction": mse_loss.detach()}
 
         self.last_mse_loss = mse_loss.detach()
+        self.last_mse_by_layer = mse_by_layer
         self.last_corr_total = (
             reconstruction[0][0].new_zeros(()) if isinstance(reconstruction, list) else reconstruction.new_zeros(())
         ).detach()
@@ -274,6 +289,7 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
         self.mse = nn.MSELoss()
 
         self.last_mse_loss = torch.tensor(0.0)
+        self.last_mse_by_layer: dict[str, torch.Tensor] = {}
         self.last_corr_total = torch.tensor(0.0)
         self.last_corr_by_layer: dict[str, torch.Tensor] = {}
 
@@ -302,6 +318,7 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
             corr_by_layer[layer_name] = corr_val.detach()
 
         self.last_mse_loss = mse_loss.detach()
+        self.last_mse_by_layer = {"reconstruction": mse_loss.detach()}
         self.last_corr_total = corr_total.detach()
         self.last_corr_by_layer = corr_by_layer
         return mse_loss + (self.lambda_strength * corr_total)
