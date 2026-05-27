@@ -18,6 +18,54 @@ from wandb_logging import (
 )
 
 
+CLASSIFICATION_ARCHITECTURES = {
+    "cnn1",
+    "cnn2",
+    "resnet18",
+    "pretrained_resnet18",
+    "greedy_stacked_autoencoder",
+}
+RECONSTRUCTION_ARCHITECTURES = {"wta_conv_ae"}
+DEFAULT_PREPROCESSING = "none"
+DEFAULT_WEIGHT_LOG_EVERY_STEPS = 100
+DEFAULT_FLOP_LOG_EVERY_STEPS = 100
+DEFAULT_MAX_EVAL_BATCHES = 25
+DEFAULT_ACTIVATION_VIZ_BATCHES = 1
+
+
+def _parse_data_config(data: str) -> tuple[str, str]:
+    """Split compact data config strings like cifar10:whiten."""
+    for separator in (":", "/", "|"):
+        if separator in data:
+            dataset, preprocessing = data.split(separator, 1)
+            return dataset, preprocessing
+    return data, DEFAULT_PREPROCESSING
+
+
+def _training_mode_for_architecture(architecture_type: str) -> str:
+    """Infer the training target from the selected model architecture."""
+    if architecture_type in CLASSIFICATION_ARCHITECTURES:
+        return "classification"
+    if architecture_type in RECONSTRUCTION_ARCHITECTURES:
+        return "reconstruction"
+    raise ValueError(f"Unknown architecture_type={architecture_type!r}.")
+
+
+def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Fill derived config fields used internally by training, models, and losses."""
+    cfg = dict(config)
+    if "data" in cfg:
+        cfg["dataset"], cfg["preprocessing"] = _parse_data_config(str(cfg["data"]))
+    elif "dataset" in cfg:
+        cfg["preprocessing"] = str(cfg.get("preprocessing", DEFAULT_PREPROCESSING))
+        cfg["data"] = f"{cfg['dataset']}:{cfg['preprocessing']}"
+    else:
+        raise KeyError("config must define data, e.g. 'cifar10:whiten'.")
+
+    cfg["training_mode"] = _training_mode_for_architecture(str(cfg["architecture_type"]))
+    return cfg
+
+
 def get_loaders(cfg: dict[str, Any], device: torch.device) -> tuple[DataLoader, DataLoader]:
     """Build train and test DataLoaders from a config dictionary."""
     train_ds = get_dataset(
@@ -52,8 +100,7 @@ def get_config_name(cfg: dict[str, Any]) -> str:
     return (
         f"{cfg['training_mode']}"
         f"-{cfg['architecture_type']}"
-        f"-{cfg['dataset']}"
-        f"-{cfg['preprocessing']}"
+        f"-{cfg['data']}"
         f"-{cfg['loss_type']}"
         f"-local_{cfg.get('local_training', False)}"
         f"-lr_{cfg['learning_rate']}"
@@ -147,7 +194,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     """Train one configured experiment and return final evaluation metrics."""
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run = wandb.init(project=config["project"], config=config)
-    cfg = dict(wandb.config)
+    cfg = normalize_config(dict(wandb.config))
     run.name = get_config_name(cfg)
     configure_wandb_metrics(run)
 
@@ -169,7 +216,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
         n = 0
         with torch.no_grad():
             for batch_idx, (xb, yb) in enumerate(test_loader):
-                if batch_idx >= int(cfg["max_eval_batches"]):
+                if batch_idx >= DEFAULT_MAX_EVAL_BATCHES:
                     break
                 xb = xb.to(device, non_blocking=True)
                 yb = yb.to(device, non_blocking=True)
@@ -199,9 +246,9 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
     global_step = 0
     log_every_steps = int(cfg["log_every_steps"])
-    weight_log_every_steps = int(cfg.get("log_weight_grids_every_steps", log_every_steps))
-    flop_log_every_steps = int(cfg.get("log_flops_every_steps", 0))
-    activation_viz_batches = max(0, int(cfg.get("log_activation_viz_batches", 1)))
+    weight_log_every_steps = DEFAULT_WEIGHT_LOG_EVERY_STEPS
+    flop_log_every_steps = DEFAULT_FLOP_LOG_EVERY_STEPS
+    activation_viz_batches = DEFAULT_ACTIVATION_VIZ_BATCHES
     eval_interval_steps = max(1, len(train_loader) // 4)
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
     activation_stats_logger = ChannelActivationStatsLogger(
@@ -292,7 +339,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                             "inputs_processed_in_epoch": inputs_processed_in_epoch,
                         }
                     log_payload.update(
-                        log_inference_flops(model, xb[:1], forward_kwargs=forward_kwargs)
+                        log_inference_flops(model, xb, forward_kwargs=forward_kwargs)
                     )
 
             optimizer.step()

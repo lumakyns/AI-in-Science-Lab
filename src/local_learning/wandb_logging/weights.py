@@ -301,6 +301,7 @@ def log_inference_flops(
     payload: dict[str, int] = {}
     handles = []
     was_training = model.training
+    sample_input = sample_input[:1].detach()
 
     def hook_for(module_name: str, module: nn.Module):
         def hook(_module, _inputs, output) -> None:

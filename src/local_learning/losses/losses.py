@@ -5,6 +5,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+CORRELATION_MODE = "max"
+COMPARISON_MODE = "shift"
+NORMALIZATION_MODE = "relu"
+POSTCOMP_MODE = "squared"
+
+
 class CorrelationRedundancy:
     @staticmethod
     def reduce_corr_matrix(corr_mat: torch.Tensor, correlation_loss: str) -> torch.Tensor:
@@ -164,10 +170,6 @@ class RedundancyLoss(CorrelationRedundancy, nn.Module):
         lambda_strength: float,
         *,
         kernel_size: int = 3,
-        correlation_mode: str = "max",
-        comparison_mode: str = "shift",
-        normalization_mode: str = "relu",
-        postcomp_mode: str = "squared",
         correlation_loss: str = "sum",
         local: bool = False,
     ) -> None:
@@ -179,10 +181,10 @@ class RedundancyLoss(CorrelationRedundancy, nn.Module):
 
         self.lambda_strength = float(lambda_strength)
         self.kernel_radius = (kernel_size - 1) // 2
-        self.correlation_mode = correlation_mode
-        self.comparison_mode = comparison_mode
-        self.normalization_mode = normalization_mode
-        self.postcomp_mode = postcomp_mode
+        self.correlation_mode = CORRELATION_MODE
+        self.comparison_mode = COMPARISON_MODE
+        self.normalization_mode = NORMALIZATION_MODE
+        self.postcomp_mode = POSTCOMP_MODE
         self.correlation_loss = correlation_loss
         self.local = bool(local)
         self.ce = nn.CrossEntropyLoss()
@@ -267,10 +269,6 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
         lambda_strength: float,
         *,
         kernel_size: int = 3,
-        correlation_mode: str = "mean",
-        comparison_mode: str = "both",
-        normalization_mode: str = "chnorm_relu",
-        postcomp_mode: str = "thresh",
         correlation_loss: str = "max",
     ) -> None:
         super().__init__()
@@ -281,10 +279,10 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
 
         self.lambda_strength = float(lambda_strength)
         self.kernel_radius = (kernel_size - 1) // 2
-        self.correlation_mode = correlation_mode
-        self.comparison_mode = comparison_mode
-        self.normalization_mode = normalization_mode
-        self.postcomp_mode = postcomp_mode
+        self.correlation_mode = CORRELATION_MODE
+        self.comparison_mode = COMPARISON_MODE
+        self.normalization_mode = NORMALIZATION_MODE
+        self.postcomp_mode = POSTCOMP_MODE
         self.correlation_loss = correlation_loss
         self.mse = nn.MSELoss()
 
@@ -338,10 +336,6 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
         return RedundancyLoss(
             lambda_strength=cfg["lambda_strength"],
             kernel_size=int(cfg["kernel_size"]),
-            correlation_mode=cfg["correlation_mode"],
-            comparison_mode=cfg["comparison_mode"],
-            normalization_mode=cfg["normalization_mode"],
-            postcomp_mode=cfg["postcomp_mode"],
             correlation_loss=cfg["correlation_loss"],
             local=bool(cfg.get("local", False)),
         )
@@ -353,10 +347,6 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
         return RedundancyReconstructionLoss(
             lambda_strength=cfg["lambda_strength"],
             kernel_size=int(cfg["kernel_size"]),
-            correlation_mode=cfg["correlation_mode"],
-            comparison_mode=cfg["comparison_mode"],
-            normalization_mode=cfg["normalization_mode"],
-            postcomp_mode=cfg["postcomp_mode"],
             correlation_loss=cfg["correlation_loss"],
         )
 
