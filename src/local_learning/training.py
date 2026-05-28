@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 from datasets import get_dataset
 from losses import get_loss
 from models import get_model
-from wandb_logging import (
+from loggers import (
     ChannelActivationScatterLogger,
     ChannelActivationStatsLogger,
     ConvNormKDEHistoryLogger,
@@ -23,6 +23,8 @@ CLASSIFICATION_ARCHITECTURES = {
     "cnn2",
     "resnet18",
     "pretrained_resnet18",
+    "vgg16",
+    "pretrained_vgg16",
     "greedy_stacked_autoencoder",
 }
 RECONSTRUCTION_ARCHITECTURES = {"wta_conv_ae"}
@@ -194,13 +196,16 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     """Train one configured experiment and return final evaluation metrics."""
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run = wandb.init(project=config["project"], config=config)
+    # Normalize config once so later code can assume explicit fields.
     cfg = normalize_config(dict(wandb.config))
     run.name = get_config_name(cfg)
     configure_wandb_metrics(run)
 
+    # Build data first so dataset_size is available to sparse models.
     train_loader, test_loader = get_loaders(cfg, device)
     cfg["dataset_size"] = len(train_loader.dataset)
 
+    # Model, loss, and optimizer all come from the normalized config.
     model = get_model(cfg).to(device)
     criterion = get_loss(cfg).to(device)
     optimizer = torch.optim.Adam(
@@ -209,6 +214,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     )
 
     def eval_model(epoch: int) -> dict[str, float]:
+        # Run a bounded validation pass to keep logging cost predictable.
         model.eval()
         loss_sum = 0.0
         acc_sum = 0.0
@@ -250,6 +256,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     flop_log_every_steps = DEFAULT_FLOP_LOG_EVERY_STEPS
     activation_viz_batches = DEFAULT_ACTIVATION_VIZ_BATCHES
     eval_interval_steps = max(1, len(train_loader) // 4)
+    # Stateful loggers accumulate snapshots between WandB writes.
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
     activation_stats_logger = ChannelActivationStatsLogger(
         zero_threshold=float(cfg.get("activation_zero_threshold", 1e-6)),
@@ -260,6 +267,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
 
     def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
+        # Capture feature-map summaries without affecting training mode.
         if activation_viz_batches == 0:
             return {}
 
@@ -300,6 +308,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             yb = yb.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
+            # Some models need epoch/sample counts for sparsity annealing.
             output, feature_maps = _forward_model(
                 cfg,
                 model,
@@ -308,11 +317,13 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 inputs_processed_in_epoch=inputs_processed_in_epoch,
             )
 
+            # Route outputs through the correct classification/reconstruction loss.
             loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
             loss.backward()
 
             log_payload: dict[str, object] | None = None
             if global_step % log_every_steps == 0:
+                # Batch scalar metrics and optional diagnostics into one WandB log.
                 log_payload = {
                     "train/loss": float(loss.detach().cpu()),
                 }
@@ -344,6 +355,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
             optimizer.step()
 
+            # Weight drift is measured after the optimizer update.
             if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
                 weight_change_payload = weight_change_logger.log(model)
                 if weight_change_payload:

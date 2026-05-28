@@ -50,7 +50,7 @@ class CorrelationRedundancy:
         )
 
     @staticmethod
-    def luca_fn(
+    def correlation_fn(
         feature_map: torch.Tensor,
         kernel_radius: int,
         correlation_mode: str,
@@ -206,7 +206,7 @@ class RedundancyLoss(CorrelationRedundancy, nn.Module):
                     raise ValueError("local=True requires FeatureMapEntry items with conv and conv_input.")
                 feature_map = conv(conv_input.detach())
 
-            corr_mat = self.luca_fn(
+            corr_mat = self.correlation_fn(
                 feature_map=feature_map,
                 kernel_radius=self.kernel_radius,
                 correlation_mode=self.correlation_mode,
@@ -303,7 +303,7 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
 
         for idx, feature_map_item in enumerate(feature_maps or []):
             layer_name, feature_map, _, _ = self.parse_feature_map(feature_map_item, idx=idx)
-            corr_mat = self.luca_fn(
+            corr_mat = self.correlation_fn(
                 feature_map=feature_map,
                 kernel_radius=self.kernel_radius,
                 correlation_mode=self.correlation_mode,
@@ -325,30 +325,32 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
 def get_loss(cfg: dict[str, Any]) -> nn.Module:
     training_mode = cfg["training_mode"]
     loss_type = cfg["loss_type"]
+    local_training = bool(cfg.get("local_training", False))
 
-    if training_mode == "classification" and bool(cfg.get("local_training", False)):
-        return LocalClassificationReconstructionLoss(
-            reconstruction_strength=float(cfg.get("local_reconstruction_strength", 1.0)),
-        )
-    if training_mode == "classification" and loss_type == "regular":
-        return ClassificationLoss()
-    if training_mode == "classification" and loss_type == "redundancy":
-        return RedundancyLoss(
-            lambda_strength=cfg["lambda_strength"],
-            kernel_size=int(cfg["kernel_size"]),
-            correlation_loss=cfg["correlation_loss"],
-            local=bool(cfg.get("local", False)),
-        )
-    if training_mode == "reconstruction" and bool(cfg.get("local_training", False)):
-        return ReconstructionLoss()
-    if training_mode == "reconstruction" and loss_type == "regular":
-        return ReconstructionLoss()
-    if training_mode == "reconstruction" and loss_type == "redundancy":
-        return RedundancyReconstructionLoss(
-            lambda_strength=cfg["lambda_strength"],
-            kernel_size=int(cfg["kernel_size"]),
-            correlation_loss=cfg["correlation_loss"],
-        )
+    match training_mode, loss_type, local_training:
+        case "classification", _, True:
+            return LocalClassificationReconstructionLoss(
+                reconstruction_strength=float(cfg.get("local_reconstruction_strength", 1.0)),
+            )
+        case "classification", "regular", False:
+            return ClassificationLoss()
+        case "classification", "redundancy", False:
+            return RedundancyLoss(
+                lambda_strength=cfg["lambda_strength"],
+                kernel_size=int(cfg["kernel_size"]),
+                correlation_loss=cfg["correlation_loss"],
+                local=bool(cfg.get("local", False)),
+            )
+        case "reconstruction", _, True:
+            return ReconstructionLoss()
+        case "reconstruction", "regular", False:
+            return ReconstructionLoss()
+        case "reconstruction", "redundancy", False:
+            return RedundancyReconstructionLoss(
+                lambda_strength=cfg["lambda_strength"],
+                kernel_size=int(cfg["kernel_size"]),
+                correlation_loss=cfg["correlation_loss"],
+            )
 
     raise ValueError(
         "Expected training_mode in {'classification', 'reconstruction'} "

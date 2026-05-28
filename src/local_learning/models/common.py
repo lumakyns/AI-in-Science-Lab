@@ -26,13 +26,28 @@ class LayerCaptureMixin:
 
 def get_num_classes(dataset: str) -> int:
     """Map supported dataset names to their classifier output widths."""
-    match dataset:
+    match dataset.removesuffix("_patches"):
         case "cifar10":
             return 10
         case "cifar100":
             return 100
         case _:
-            raise ValueError("dataset must be 'cifar10' or 'cifar100'.")
+            raise ValueError(
+                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+            )
+
+
+def get_input_dim(dataset: str) -> tuple[int, int, int]:
+    """Map supported dataset names to model input shapes."""
+    match dataset:
+        case "cifar10" | "cifar100":
+            return (3, 32, 32)
+        case "cifar10_patches" | "cifar100_patches":
+            return (3, 8, 8)
+        case _:
+            raise ValueError(
+                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+            )
 
 
 def _first_hidden_channel(cfg: dict[str, Any]) -> int:
@@ -49,9 +64,11 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
     from .basic_cnn import BasicCNN1, BasicCNN2
     from .greedy_stacked_autoencoder import GreedyStackedAutoencoder
     from .resnet import TorchvisionResNet18
+    from .vgg import TorchvisionVGG16
     from .wta_conv_ae import WTA_CONV_AE
 
     num_classes = get_num_classes(cfg["dataset"])
+    input_dim = get_input_dim(cfg["dataset"])
     architecture_type = cfg["architecture_type"]
 
     match architecture_type:
@@ -71,9 +88,21 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 pretrained=True,
                 freeze_backbone=True,
             )
+        case "vgg16":
+            return TorchvisionVGG16(
+                num_classes=num_classes,
+                pretrained=False,
+                freeze_backbone=False,
+            )
+        case "pretrained_vgg16":
+            return TorchvisionVGG16(
+                num_classes=num_classes,
+                pretrained=True,
+                freeze_backbone=True,
+            )
         case "wta_conv_ae":
             return WTA_CONV_AE(
-                dim=(3, 32, 32),
+                dim=input_dim,
                 hidden_channels=_first_hidden_channel(cfg),
                 k_spatial=cfg.get("k_spatial"),
                 k_population=cfg.get("k_population"),
@@ -84,7 +113,7 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
             )
         case "greedy_stacked_autoencoder":
             return GreedyStackedAutoencoder(
-                dim=(3, 32, 32),
+                dim=input_dim,
                 hidden_channels=cfg["hidden_channels"],
                 num_classes=num_classes if cfg["training_mode"] == "classification" else None,
                 num_layers=int(cfg["num_layers"]),

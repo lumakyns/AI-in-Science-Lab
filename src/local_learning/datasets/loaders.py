@@ -11,6 +11,8 @@ CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
 CIFAR100_STD = (0.2675, 0.2565, 0.2761)
+PATCHES_PER_IMAGE = 5
+PATCH_SIZE = 8
 
 
 def local_contrast_normalize(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -43,7 +45,7 @@ class WhitenedCIFAR(Dataset):
         x = local_contrast_normalize(x, eps=lcn_eps)
         x = zca_whiten(x, eps=zca_eps)
 
-        self.images = torch.from_numpy(x).float().view(-1, 3, 32, 32)
+        self.images = torch.from_numpy(x).float().view_as(images)
         self.labels = labels.long()
 
     def __len__(self) -> int:
@@ -53,24 +55,96 @@ class WhitenedCIFAR(Dataset):
         return self.images[idx], self.labels[idx]
 
 
+class CIFARPatches(Dataset):
+    def __init__(
+        self,
+        base_dataset: Dataset,
+        *,
+        patches_per_image: int = PATCHES_PER_IMAGE,
+        patch_size: int = PATCH_SIZE,
+        seed: int = 0,
+    ) -> None:
+        self.base_dataset = base_dataset
+        self.patches_per_image = int(patches_per_image)
+        self.patch_size = int(patch_size)
+
+        if self.patches_per_image <= 0:
+            raise ValueError("patches_per_image must be positive.")
+        if self.patch_size <= 0:
+            raise ValueError("patch_size must be positive.")
+
+        image, _ = self.base_dataset[0]
+        if image.ndim != 3:
+            raise ValueError("CIFARPatches expects images shaped as (C, H, W).")
+        _, image_height, image_width = image.shape
+        if self.patch_size > image_height or self.patch_size > image_width:
+            raise ValueError("patch_size must fit inside the source images.")
+
+        generator = torch.Generator().manual_seed(seed)
+        shape = (len(self.base_dataset), self.patches_per_image)
+        self.tops = torch.randint(
+            0,
+            image_height - self.patch_size + 1,
+            shape,
+            generator=generator,
+        )
+        self.lefts = torch.randint(
+            0,
+            image_width - self.patch_size + 1,
+            shape,
+            generator=generator,
+        )
+
+    def __len__(self) -> int:
+        return len(self.base_dataset) * self.patches_per_image
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        image_idx = idx // self.patches_per_image
+        patch_idx = idx % self.patches_per_image
+        image, label = self.base_dataset[image_idx]
+        top = int(self.tops[image_idx, patch_idx])
+        left = int(self.lefts[image_idx, patch_idx])
+        patch = image[:, top : top + self.patch_size, left : left + self.patch_size]
+        return patch, torch.as_tensor(label).long()
+
+
+def _base_dataset_name(dataset: str) -> str:
+    return dataset.removesuffix("_patches")
+
+
+def _is_patch_dataset(dataset: str) -> bool:
+    return dataset.endswith("_patches")
+
+
 def _dataset_cls(dataset: str):
-    match dataset:
+    match _base_dataset_name(dataset):
         case "cifar10":
             return datasets.CIFAR10
         case "cifar100":
             return datasets.CIFAR100
         case _:
-            raise ValueError("dataset must be 'cifar10' or 'cifar100'.")
+            raise ValueError(
+                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+            )
 
 
 def _normalization_stats(dataset: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    match dataset:
+    match _base_dataset_name(dataset):
         case "cifar10":
             return CIFAR10_MEAN, CIFAR10_STD
         case "cifar100":
             return CIFAR100_MEAN, CIFAR100_STD
         case _:
-            raise ValueError("dataset must be 'cifar10' or 'cifar100'.")
+            raise ValueError(
+                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+            )
+
+
+def _maybe_patch_dataset(base: Dataset, dataset: str, train: bool) -> Dataset:
+    if not _is_patch_dataset(dataset):
+        return base
+    seed = 0 if train else 1
+    return CIFARPatches(base, seed=seed)
 
 
 def get_dataset(
@@ -83,14 +157,16 @@ def get_dataset(
     match preprocessing:
         case "none":
             transform = transforms.ToTensor()
-            return dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
+            base = dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
+            return _maybe_patch_dataset(base, dataset, train)
         case "normalize":
             mean, std = _normalization_stats(dataset)
             transform = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Normalize(mean, std),
             ])
-            return dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
+            base = dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
+            return _maybe_patch_dataset(base, dataset, train)
         case "whiten":
             base = dataset_cls(
                 str(DATA_DIR),
@@ -98,7 +174,7 @@ def get_dataset(
                 download=True,
                 transform=transforms.ToTensor(),
             )
+            base = _maybe_patch_dataset(base, dataset, train)
             return WhitenedCIFAR(base)
         case _:
             raise ValueError("preprocessing must be 'none', 'normalize', or 'whiten'.")
-
