@@ -27,26 +27,34 @@ class LayerCaptureMixin:
 def get_num_classes(dataset: str) -> int:
     """Map supported dataset names to their classifier output widths."""
     match dataset.removesuffix("_patches"):
-        case "cifar10":
+        case "cifar10" | "smallcifar10":
             return 10
         case "cifar100":
             return 100
+        case "imagenet":
+            return 1000
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
+                "'smallcifar10_patches', or 'imagenet_patches'."
             )
 
 
 def get_input_dim(dataset: str) -> tuple[int, int, int]:
     """Map supported dataset names to model input shapes."""
     match dataset:
-        case "cifar10" | "cifar100":
+        case "cifar10" | "smallcifar10" | "cifar100":
             return (3, 32, 32)
-        case "cifar10_patches" | "cifar100_patches":
+        case "imagenet":
+            return (3, 224, 224)
+        case "cifar10_patches" | "smallcifar10_patches" | "cifar100_patches" | "imagenet_patches":
             return (3, 8, 8)
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'cifar10_patches', or 'cifar100_patches'."
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
+                "'smallcifar10_patches', or 'imagenet_patches'."
             )
 
 
@@ -91,14 +99,18 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
         case "vgg16":
             return TorchvisionVGG16(
                 num_classes=num_classes,
+                dataset=str(cfg["dataset"]),
                 pretrained=False,
                 freeze_backbone=False,
+                small=bool(cfg.get("vgg16_small", False)),
             )
         case "pretrained_vgg16":
             return TorchvisionVGG16(
                 num_classes=num_classes,
+                dataset=str(cfg["dataset"]),
                 pretrained=True,
                 freeze_backbone=True,
+                small=bool(cfg.get("vgg16_small", False)),
             )
         case "wta_conv_ae":
             return WTA_CONV_AE(
@@ -123,7 +135,7 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 total_epochs=int(cfg["epochs"]),
                 dataset_size=int(cfg.get("dataset_size", 1)),
                 a=float(cfg.get("wta_eval_multiplier", 1.0)),
-                local_training=bool(cfg.get("local_training", False)),
+                local_training=False,  # TODO: Remove
             )
         case _:
             raise ValueError(f"Unknown architecture_type={architecture_type!r}.")

@@ -11,8 +11,10 @@ from models import get_model
 from loggers import (
     ChannelActivationScatterLogger,
     ChannelActivationStatsLogger,
+    ChannelLineSeriesHistoryLogger,
     ConvNormKDEHistoryLogger,
     ConvWeightChangeLogger,
+    FeatureMapChannelLineLogger,
     log_conv_weight_snapshot,
     log_inference_flops,
 )
@@ -99,12 +101,18 @@ def get_loaders(cfg: dict[str, Any], device: torch.device) -> tuple[DataLoader, 
 
 def get_config_name(cfg: dict[str, Any]) -> str:
     """Create a concise WandB run name from the main experiment settings."""
+    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
+    vgg16_mode = (
+        "manual"
+        if first_full_epoch is None
+        else f"full_epoch_{first_full_epoch}"
+    )
     return (
         f"{cfg['training_mode']}"
         f"-{cfg['architecture_type']}"
         f"-{cfg['data']}"
         f"-{cfg['loss_type']}"
-        f"-local_{cfg.get('local_training', False)}"
+        f"-vgg16_{vgg16_mode}"
         f"-lr_{cfg['learning_rate']}"
     )
 
@@ -159,7 +167,9 @@ def _metric_payload(cfg: dict[str, Any], criterion, output, yb: torch.Tensor) ->
 
     for layer_name, layer_mse in getattr(criterion, "last_mse_by_layer", {}).items():
         safe_name = str(layer_name).replace(".", "__").replace("/", "__")
-        payload[f"losses/autoencoder_mse/{safe_name}"] = float(layer_mse.detach().cpu())
+        layer_mse_value = float(layer_mse.detach().cpu())
+        payload[f"losses/autoencoder_mse/{safe_name}"] = layer_mse_value
+        payload[f"losses/reconstruction_mse/{safe_name}"] = layer_mse_value
 
     return payload
 
@@ -172,6 +182,30 @@ def _log_loss_parts(criterion, payload: dict[str, object]) -> None:
     for layer_name, layer_loss in getattr(criterion, "last_corr_by_layer", {}).items():
         safe_name = str(layer_name).replace(".", "__").replace("/", "__")
         payload[f"losses/{safe_name}"] = float(layer_loss.detach().cpu())
+
+
+def _vgg16_first_full_training_epoch(cfg: dict[str, Any]) -> int | None:
+    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
+    return None if first_full_epoch is None else int(first_full_epoch)
+
+
+def _vgg16_pretrain_mode(cfg: dict[str, Any], *, epoch: int) -> bool:
+    if cfg["architecture_type"] not in {"vgg16", "pretrained_vgg16"}:
+        return False
+    first_full_epoch = _vgg16_first_full_training_epoch(cfg)
+    return first_full_epoch is not None and epoch < first_full_epoch
+
+
+def _vgg16_forward_flags(cfg: dict[str, Any], *, epoch: int) -> tuple[bool, bool]:
+    first_full_epoch = _vgg16_first_full_training_epoch(cfg)
+    if first_full_epoch is None:
+        return (
+            bool(cfg.get("vgg16_deconv_training", False)),
+            bool(cfg.get("vgg16_local_training", False)),
+        )
+
+    pretrain_mode = _vgg16_pretrain_mode(cfg, epoch=epoch)
+    return pretrain_mode, pretrain_mode
 
 
 def _forward_model(
@@ -188,6 +222,13 @@ def _forward_model(
             xb,
             epoch=epoch,
             inputs_processed_in_epoch=inputs_processed_in_epoch,
+        )
+    if cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
+        deconv_training, local_training = _vgg16_forward_flags(cfg, epoch=epoch)
+        return model(
+            xb,
+            deconv_training=deconv_training,
+            local_training=local_training,
         )
     return model(xb)
 
@@ -265,6 +306,19 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     )
     weight_change_logger = ConvWeightChangeLogger(model)
     norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
+    gradient_history_logger = ChannelLineSeriesHistoryLogger(
+        wandb,
+        prefix="viz-train-gradient-magnitude-lines",
+    )
+    encoder_mean_history_logger = ChannelLineSeriesHistoryLogger(
+        wandb,
+        prefix="viz-train-encoder-weight-channel-mean-lines",
+    )
+    encoder_std_history_logger = ChannelLineSeriesHistoryLogger(
+        wandb,
+        prefix="viz-train-encoder-weight-channel-std-lines",
+    )
+    feature_map_channel_line_logger = FeatureMapChannelLineLogger(wandb)
 
     def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
         # Capture feature-map summaries without affecting training mode.
@@ -328,6 +382,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     "train/loss": float(loss.detach().cpu()),
                 }
                 log_payload.update(_metric_payload(cfg, criterion, output, yb))
+                log_payload.update(
+                    feature_map_channel_line_logger.log_step(
+                        feature_maps,
+                        step=global_step,
+                    )
+                )
                 if hasattr(model, "last_k"):
                     log_payload["general/last_k"] = int(model.last_k)
                 _log_loss_parts(criterion, log_payload)
@@ -339,6 +399,9 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                             wandb,
                             norm_kde_history_logger,
                             step=global_step,
+                            gradient_history_logger=gradient_history_logger,
+                            encoder_mean_history_logger=encoder_mean_history_logger,
+                            encoder_std_history_logger=encoder_std_history_logger,
                         )
                     )
 

@@ -325,9 +325,14 @@ class RedundancyReconstructionLoss(CorrelationRedundancy, nn.Module):
 def get_loss(cfg: dict[str, Any]) -> nn.Module:
     training_mode = cfg["training_mode"]
     loss_type = cfg["loss_type"]
-    local_training = bool(cfg.get("local_training", False))
+    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
+    deconv_training = (
+        bool(cfg.get("vgg16_deconv_training", False))
+        if first_full_epoch is None
+        else int(first_full_epoch) > 0
+    )
 
-    match training_mode, loss_type, local_training:
+    match training_mode, loss_type, deconv_training:
         case "classification", _, True:
             return LocalClassificationReconstructionLoss(
                 reconstruction_strength=float(cfg.get("local_reconstruction_strength", 1.0)),

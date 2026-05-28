@@ -309,3 +309,94 @@ class ChannelActivationScatterLogger:
 
     def reset(self) -> None:
         self._layer_batches.clear()
+
+
+class FeatureMapChannelLineLogger:
+    """Log per-channel feature-map mean/stddev histories as one line plot per layer."""
+
+    def __init__(
+        self,
+        wandb_module: Any,
+        *,
+        mean_prefix: str = "viz-train-feature-map-channel-mean",
+        std_prefix: str = "viz-train-feature-map-channel-std",
+        max_snapshots: int = 64,
+    ) -> None:
+        self.wandb = wandb_module
+        self.mean_prefix = mean_prefix
+        self.std_prefix = std_prefix
+        self.max_snapshots = max(1, int(max_snapshots))
+        self._mean_history: dict[str, list[tuple[int, torch.Tensor]]] = {}
+        self._std_history: dict[str, list[tuple[int, torch.Tensor]]] = {}
+
+    def log_step(self, feature_maps: list, *, step: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for idx, feature_map_item in enumerate(feature_maps):
+            layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
+            if feature_map.ndim != 4:
+                continue
+            safe_name = _safe_layer_name(layer_name)
+            fmap = feature_map.detach().to(torch.float32)
+            channel_values = fmap.flatten(start_dim=2)
+            channel_means = channel_values.mean(dim=(0, 2)).cpu()
+            channel_stds = channel_values.std(dim=(0, 2), unbiased=False).cpu()
+            payload.update(
+                self._log_values(
+                    self._mean_history,
+                    self.mean_prefix,
+                    safe_name,
+                    channel_means,
+                    step=step,
+                    title=f"{safe_name} feature-map mean by channel",
+                    yname="feature_map_mean",
+                )
+            )
+            payload.update(
+                self._log_values(
+                    self._std_history,
+                    self.std_prefix,
+                    safe_name,
+                    channel_stds,
+                    step=step,
+                    title=f"{safe_name} feature-map stddev by channel",
+                    yname="feature_map_stddev",
+                )
+            )
+        return payload
+
+    def _log_values(
+        self,
+        history: dict[str, list[tuple[int, torch.Tensor]]],
+        prefix: str,
+        safe_name: str,
+        values: torch.Tensor,
+        *,
+        step: int,
+        title: str,
+        yname: str,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        channel_values = values.detach().to(torch.float32).flatten().cpu()
+        if channel_values.numel() == 0:
+            return payload
+
+        layer_history = history.setdefault(safe_name, [])
+        if layer_history and layer_history[-1][1].numel() != channel_values.numel():
+            layer_history.clear()
+        layer_history.append((int(step), channel_values))
+        del layer_history[:-self.max_snapshots]
+
+        xs = [snapshot_step for snapshot_step, _ in layer_history]
+        ys = [
+            [float(snapshot_values[channel_idx]) for _, snapshot_values in layer_history]
+            for channel_idx in range(int(channel_values.numel()))
+        ]
+        payload[f"{prefix}/{safe_name}"] = self.wandb.plot.line_series(
+            xs=xs,
+            ys=ys,
+            keys=[f"channel_{idx}" for idx in range(int(channel_values.numel()))],
+            title=title,
+            xname="step",
+            yname=yname,
+        )
+        return payload
