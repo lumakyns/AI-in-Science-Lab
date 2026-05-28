@@ -74,15 +74,24 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         self.deconv5_3 = nn.ConvTranspose2d(512, 512, kernel_size=3, padding=1)
         self.pool5 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
-        classifier_in_features = (256 if self.small else 512) * 7 * 7
-        self.classifier_fc1 = nn.Linear(classifier_in_features, 4096)
-        self.classifier_relu1 = nn.ReLU(True)
-        self.classifier_dropout1 = nn.Dropout()
-        self.classifier_fc2 = nn.Linear(4096, 4096)
-        self.classifier_relu2 = nn.ReLU(True)
-        self.classifier_dropout2 = nn.Dropout()
-        self.classifier_fc3 = nn.Linear(4096, num_classes)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1) if self.small else (7, 7))
+        classifier_in_features = 256 if self.small else 512 * 7 * 7
+        if self.small:
+            self.classifier_fc1 = nn.Identity()
+            self.classifier_relu1 = nn.Identity()
+            self.classifier_dropout1 = nn.Identity()
+            self.classifier_fc2 = nn.Identity()
+            self.classifier_relu2 = nn.Identity()
+            self.classifier_dropout2 = nn.Identity()
+            self.classifier_fc3 = nn.Linear(classifier_in_features, num_classes)
+        else:
+            self.classifier_fc1 = nn.Linear(classifier_in_features, 4096)
+            self.classifier_relu1 = nn.ReLU(True)
+            self.classifier_dropout1 = nn.Dropout()
+            self.classifier_fc2 = nn.Linear(4096, 4096)
+            self.classifier_relu2 = nn.ReLU(True)
+            self.classifier_dropout2 = nn.Dropout()
+            self.classifier_fc3 = nn.Linear(4096, num_classes)
 
         self._initialize_weights()
         if pretrained and self.small:
