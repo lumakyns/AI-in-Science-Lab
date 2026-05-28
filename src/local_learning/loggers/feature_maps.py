@@ -348,7 +348,6 @@ class FeatureMapChannelLineLogger:
                     channel_means,
                     step=step,
                     title=f"{safe_name} feature-map mean by channel",
-                    yname="feature_map_mean",
                 )
             )
             payload.update(
@@ -359,7 +358,6 @@ class FeatureMapChannelLineLogger:
                     channel_stds,
                     step=step,
                     title=f"{safe_name} feature-map stddev by channel",
-                    yname="feature_map_stddev",
                 )
             )
         return payload
@@ -373,7 +371,6 @@ class FeatureMapChannelLineLogger:
         *,
         step: int,
         title: str,
-        yname: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         channel_values = values.detach().to(torch.float32).flatten().cpu()
@@ -397,6 +394,5 @@ class FeatureMapChannelLineLogger:
             keys=[f"channel_{idx}" for idx in range(int(channel_values.numel()))],
             title=title,
             xname="step",
-            yname=yname,
         )
         return payload

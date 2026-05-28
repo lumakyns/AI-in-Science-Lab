@@ -98,7 +98,6 @@ class ChannelLineSeriesHistoryLogger:
         *,
         step: int,
         title: str,
-        yname: str,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         channel_values = values.detach().to(torch.float32).flatten().cpu()
@@ -122,7 +121,6 @@ class ChannelLineSeriesHistoryLogger:
             keys=[f"channel_{idx}" for idx in range(int(channel_values.numel()))],
             title=title,
             xname="step",
-            yname=yname,
         )
         return payload
 
@@ -191,7 +189,6 @@ def log_conv_weight_snapshot(
                         channel_means,
                         step=step,
                         title=f"{safe_name} encoder weight mean by channel",
-                        yname="weight_mean",
                     )
                 )
             if encoder_std_history_logger is not None:
@@ -201,7 +198,6 @@ def log_conv_weight_snapshot(
                         channel_stds,
                         step=step,
                         title=f"{safe_name} encoder weight stddev by channel",
-                        yname="weight_stddev",
                     )
                 )
 
@@ -216,7 +212,6 @@ def log_conv_weight_snapshot(
                         grad_norms,
                         step=step,
                         title=f"{safe_name} gradient magnitude by channel",
-                        yname="gradient_magnitude",
                     )
                 )
 
