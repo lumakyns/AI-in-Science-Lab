@@ -41,13 +41,11 @@ class ChannelActivationStatsLogger:
         prefix: str = "viz-test-activation-epoch",
         distance_prefix: str = "viz-test-activation-geometric-mean-distance",
         zero_threshold: float = 1e-6,
-        dead_active_fraction: float = 0.01,
         dominant_share_multiplier: float = 2.0,
     ) -> None:
         self.prefix = prefix
         self.distance_prefix = distance_prefix
         self.zero_threshold = zero_threshold
-        self.dead_active_fraction = dead_active_fraction
         self.dominant_share_multiplier = dominant_share_multiplier
         self._stats: dict[str, dict[str, torch.Tensor]] = {}
 
@@ -96,7 +94,6 @@ class ChannelActivationStatsLogger:
             ].clamp_min(1)
 
             sparsity = zero_count / total_count
-            active_fraction = 1.0 - sparsity
             mass_total = activation_mass.sum()
             if float(mass_total) > 0.0:
                 mass_share = activation_mass / mass_total
@@ -105,13 +102,9 @@ class ChannelActivationStatsLogger:
 
             channel_count = max(1, int(activation_mass.numel()))
             dominant_threshold = self.dominant_share_multiplier / channel_count
-            dead_channels = active_fraction <= self.dead_active_fraction
             dominant_channels = mass_share >= dominant_threshold
 
             payload[f"{self.prefix}-sparsity/{safe_name}"] = sparsity
-            payload[f"{self.prefix}-active-fraction/{safe_name}"] = active_fraction
-            payload[f"{self.prefix}-dead-channels/{safe_name}"] = int(dead_channels.sum())
-            payload[f"{self.prefix}-dominant-channels/{safe_name}"] = int(dominant_channels.sum())
             payload[f"{self.prefix}-dominant-mass-share/{safe_name}"] = float(
                 mass_share[dominant_channels].sum()
             )
@@ -311,88 +304,39 @@ class ChannelActivationScatterLogger:
         self._layer_batches.clear()
 
 
-class FeatureMapChannelLineLogger:
-    """Log per-channel feature-map mean/stddev histories as one line plot per layer."""
+def _image_channel_distribution_stats(feature_map: torch.Tensor) -> dict[str, float]:
+    """Summarize spatial means across sampled images first, then channels."""
+    image_channel_values = feature_map.detach().to(torch.float32).flatten(start_dim=2).cpu()
+    spatial_means = image_channel_values.mean(dim=2)
+    image_means = spatial_means.mean(dim=0)
+    image_stds = spatial_means.std(dim=0, unbiased=False)
+    return {
+        "mean_mean": float(image_means.mean()),
+        "mean_stddev": float(image_means.std(unbiased=False)),
+        "stddev_mean": float(image_stds.mean()),
+        "stddev_stddev": float(image_stds.std(unbiased=False)),
+    }
+
+
+class FeatureMapDistributionLogger:
+    """Log compact feature-map distribution summaries per layer."""
 
     def __init__(
         self,
         wandb_module: Any,
         *,
-        mean_prefix: str = "viz-train-feature-map-channel-mean",
-        std_prefix: str = "viz-train-feature-map-channel-std",
-        max_snapshots: int = 64,
+        prefix: str = "viz-train-feature-map-distribution",
     ) -> None:
         self.wandb = wandb_module
-        self.mean_prefix = mean_prefix
-        self.std_prefix = std_prefix
-        self.max_snapshots = max(1, int(max_snapshots))
-        self._mean_history: dict[str, list[tuple[int, torch.Tensor]]] = {}
-        self._std_history: dict[str, list[tuple[int, torch.Tensor]]] = {}
+        self.prefix = prefix
 
-    def log_step(self, feature_maps: list, *, step: int) -> dict[str, Any]:
+    def log_step(self, feature_maps: list) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for idx, feature_map_item in enumerate(feature_maps):
             layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
             if feature_map.ndim != 4:
                 continue
             safe_name = _safe_layer_name(layer_name)
-            fmap = feature_map.detach().to(torch.float32)
-            channel_values = fmap.flatten(start_dim=2)
-            channel_means = channel_values.mean(dim=(0, 2)).cpu()
-            channel_stds = channel_values.std(dim=(0, 2), unbiased=False).cpu()
-            payload.update(
-                self._log_values(
-                    self._mean_history,
-                    self.mean_prefix,
-                    safe_name,
-                    channel_means,
-                    step=step,
-                    title=f"{safe_name} feature-map mean by channel",
-                )
-            )
-            payload.update(
-                self._log_values(
-                    self._std_history,
-                    self.std_prefix,
-                    safe_name,
-                    channel_stds,
-                    step=step,
-                    title=f"{safe_name} feature-map stddev by channel",
-                )
-            )
-        return payload
-
-    def _log_values(
-        self,
-        history: dict[str, list[tuple[int, torch.Tensor]]],
-        prefix: str,
-        safe_name: str,
-        values: torch.Tensor,
-        *,
-        step: int,
-        title: str,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        channel_values = values.detach().to(torch.float32).flatten().cpu()
-        if channel_values.numel() == 0:
-            return payload
-
-        layer_history = history.setdefault(safe_name, [])
-        if layer_history and layer_history[-1][1].numel() != channel_values.numel():
-            layer_history.clear()
-        layer_history.append((int(step), channel_values))
-        del layer_history[:-self.max_snapshots]
-
-        xs = [snapshot_step for snapshot_step, _ in layer_history]
-        ys = [
-            [float(snapshot_values[channel_idx]) for _, snapshot_values in layer_history]
-            for channel_idx in range(int(channel_values.numel()))
-        ]
-        payload[f"{prefix}/{safe_name}"] = self.wandb.plot.line_series(
-            xs=xs,
-            ys=ys,
-            keys=[f"channel_{idx}" for idx in range(int(channel_values.numel()))],
-            title=title,
-            xname="step",
-        )
+            for stat_name, stat_value in _image_channel_distribution_stats(feature_map).items():
+                payload[f"{self.prefix}/{stat_name}/{safe_name}"] = stat_value
         return payload

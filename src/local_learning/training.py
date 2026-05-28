@@ -11,10 +11,9 @@ from models import get_model
 from loggers import (
     ChannelActivationScatterLogger,
     ChannelActivationStatsLogger,
-    ChannelLineSeriesHistoryLogger,
     ConvNormKDEHistoryLogger,
     ConvWeightChangeLogger,
-    FeatureMapChannelLineLogger,
+    FeatureMapDistributionLogger,
     log_conv_weight_snapshot,
     log_inference_flops,
 )
@@ -301,24 +300,11 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
     activation_stats_logger = ChannelActivationStatsLogger(
         zero_threshold=float(cfg.get("activation_zero_threshold", 1e-6)),
-        dead_active_fraction=float(cfg.get("activation_dead_active_fraction", 0.01)),
         dominant_share_multiplier=float(cfg.get("activation_dominant_share_multiplier", 2.0)),
     )
     weight_change_logger = ConvWeightChangeLogger(model)
     norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
-    gradient_history_logger = ChannelLineSeriesHistoryLogger(
-        wandb,
-        prefix="viz-train-gradient-magnitude-lines",
-    )
-    encoder_mean_history_logger = ChannelLineSeriesHistoryLogger(
-        wandb,
-        prefix="viz-train-encoder-weight-channel-mean-lines",
-    )
-    encoder_std_history_logger = ChannelLineSeriesHistoryLogger(
-        wandb,
-        prefix="viz-train-encoder-weight-channel-std-lines",
-    )
-    feature_map_channel_line_logger = FeatureMapChannelLineLogger(wandb)
+    feature_map_distribution_logger = FeatureMapDistributionLogger(wandb)
 
     def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
         # Capture feature-map summaries without affecting training mode.
@@ -383,10 +369,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 }
                 log_payload.update(_metric_payload(cfg, criterion, output, yb))
                 log_payload.update(
-                    feature_map_channel_line_logger.log_step(
-                        feature_maps,
-                        step=global_step,
-                    )
+                    feature_map_distribution_logger.log_step(feature_maps)
                 )
                 if hasattr(model, "last_k"):
                     log_payload["general/last_k"] = int(model.last_k)
@@ -399,9 +382,6 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                             wandb,
                             norm_kde_history_logger,
                             step=global_step,
-                            gradient_history_logger=gradient_history_logger,
-                            encoder_mean_history_logger=encoder_mean_history_logger,
-                            encoder_std_history_logger=encoder_std_history_logger,
                         )
                     )
 

@@ -189,9 +189,10 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         def hook(_module, _inputs, output) -> None:
             """Save the hooked module output when it is a tensor."""
             if isinstance(output, torch.Tensor):
-                self._save_layer_output(f"vgg16.{name}", output)
-                if output.ndim == 4:
-                    self._forward_feature_maps.append((f"vgg16.{name}", output))
+                captured = output.clone()
+                self._save_layer_output(f"vgg16.{name}", captured)
+                if captured.ndim == 4:
+                    self._forward_feature_maps.append((f"vgg16.{name}", captured))
 
         return hook
 

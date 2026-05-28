@@ -76,53 +76,18 @@ def _channel_values(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.detach().to(torch.float32).flatten(start_dim=1).cpu()
 
 
-class ChannelLineSeriesHistoryLogger:
-    """Track per-channel values over steps and log one line-series plot per layer."""
-
-    def __init__(
-        self,
-        wandb_module: Any,
-        *,
-        prefix: str,
-        max_snapshots: int = 64,
-    ) -> None:
-        self.wandb = wandb_module
-        self.prefix = prefix
-        self.max_snapshots = max(1, int(max_snapshots))
-        self._history: dict[str, list[tuple[int, torch.Tensor]]] = {}
-
-    def log_values(
-        self,
-        safe_name: str,
-        values: torch.Tensor,
-        *,
-        step: int,
-        title: str,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        channel_values = values.detach().to(torch.float32).flatten().cpu()
-        if channel_values.numel() == 0:
-            return payload
-
-        layer_history = self._history.setdefault(safe_name, [])
-        if layer_history and layer_history[-1][1].numel() != channel_values.numel():
-            layer_history.clear()
-        layer_history.append((int(step), channel_values))
-        del layer_history[:-self.max_snapshots]
-
-        xs = [snapshot_step for snapshot_step, _ in layer_history]
-        ys = [
-            [float(snapshot_values[channel_idx]) for _, snapshot_values in layer_history]
-            for channel_idx in range(int(channel_values.numel()))
-        ]
-        payload[f"{self.prefix}/{safe_name}"] = self.wandb.plot.line_series(
-            xs=xs,
-            ys=ys,
-            keys=[f"channel_{idx}" for idx in range(int(channel_values.numel()))],
-            title=title,
-            xname="step",
-        )
-        return payload
+def _image_channel_distribution_stats(tensor: torch.Tensor) -> dict[str, float]:
+    """Summarize spatial means/stddevs across images first, then channels."""
+    image_channel_values = tensor.detach().to(torch.float32).flatten(start_dim=2).cpu()
+    spatial_means = image_channel_values.mean(dim=2)
+    image_means = spatial_means.mean(dim=0)
+    image_stds = spatial_means.std(dim=0, unbiased=False)
+    return {
+        "mean_mean": float(image_means.mean()),
+        "mean_stddev": float(image_means.std(unbiased=False)),
+        "stddev_mean": float(image_stds.mean()),
+        "stddev_stddev": float(image_stds.std(unbiased=False)),
+    }
 
 
 def _kde_density_on_x(values: torch.Tensor, xs: torch.Tensor) -> list[float]:
@@ -151,12 +116,9 @@ def log_conv_weight_snapshot(
     norm_kde_history_logger: "ConvNormKDEHistoryLogger",
     *,
     step: int,
-    gradient_history_logger: ChannelLineSeriesHistoryLogger | None = None,
-    encoder_mean_history_logger: ChannelLineSeriesHistoryLogger | None = None,
-    encoder_std_history_logger: ChannelLineSeriesHistoryLogger | None = None,
     filter_grid_prefix: str = "viz-test-filter-grid",
-    channel_stat_prefix: str = "viz-test-weight-channel-stat",
-    gradient_prefix: str = "viz-train-gradient-magnitude",
+    distribution_prefix: str = "viz-train-encoder-weight-distribution",
+    gradient_prefix: str = "viz-train-gradient-distribution",
 ) -> dict[str, Any]:
     """Log weight diagnostics in one pass over conv/deconv modules."""
     payload: dict[str, Any] = {}
@@ -171,49 +133,15 @@ def log_conv_weight_snapshot(
         payload[f"{filter_grid_prefix}/{safe_name}_{layer_type}"] = wandb_module.Image(image)
 
         values = _channel_values(filter_bank)
-        payload[f"{channel_stat_prefix}-max/{safe_name}"] = values.amax(dim=1)
-        payload[f"{channel_stat_prefix}-min/{safe_name}"] = values.amin(dim=1)
-        payload[f"{channel_stat_prefix}-mean/{safe_name}"] = values.mean(dim=1)
-        payload[f"{channel_stat_prefix}-std/{safe_name}"] = values.std(dim=1, unbiased=False)
-        payload[f"{channel_stat_prefix}-variance/{safe_name}"] = values.var(dim=1, unbiased=False)
         norms = values.norm(dim=1)
-        payload[f"{channel_stat_prefix}-norm/{safe_name}"] = norms
 
         if isinstance(module, nn.Conv2d):
-            channel_means = values.mean(dim=1)
-            channel_stds = values.std(dim=1, unbiased=False)
-            if encoder_mean_history_logger is not None:
-                payload.update(
-                    encoder_mean_history_logger.log_values(
-                        safe_name,
-                        channel_means,
-                        step=step,
-                        title=f"{safe_name} encoder weight mean by channel",
-                    )
-                )
-            if encoder_std_history_logger is not None:
-                payload.update(
-                    encoder_std_history_logger.log_values(
-                        safe_name,
-                        channel_stds,
-                        step=step,
-                        title=f"{safe_name} encoder weight stddev by channel",
-                    )
-                )
+            for stat_name, stat_value in _image_channel_distribution_stats(filter_bank).items():
+                payload[f"{distribution_prefix}/{stat_name}/{safe_name}"] = stat_value
 
         if module.weight.grad is not None:
-            grad_values = _channel_values(module.weight.grad)
-            grad_norms = grad_values.norm(dim=1)
-            payload[f"{gradient_prefix}/{safe_name}"] = grad_norms
-            if gradient_history_logger is not None:
-                payload.update(
-                    gradient_history_logger.log_values(
-                        safe_name,
-                        grad_norms,
-                        step=step,
-                        title=f"{safe_name} gradient magnitude by channel",
-                    )
-                )
+            for stat_name, stat_value in _image_channel_distribution_stats(module.weight.grad).items():
+                payload[f"{gradient_prefix}/{stat_name}/{safe_name}"] = stat_value
 
         payload.update(norm_kde_history_logger.log_norms(safe_name, norms, step=step))
 
