@@ -17,6 +17,7 @@ from loggers import (
     log_conv_weight_snapshot,
     log_inference_flops,
 )
+from loggers.names import wandb_safe_layer_name
 
 
 CLASSIFICATION_ARCHITECTURES = {
@@ -186,7 +187,7 @@ def _metric_payload(cfg: dict[str, Any], criterion, output, yb: torch.Tensor) ->
         )
 
     for layer_name, layer_mse in getattr(criterion, "last_mse_by_layer", {}).items():
-        safe_name = str(layer_name).replace(".", "__").replace("/", "__")
+        safe_name = wandb_safe_layer_name(str(layer_name))
         layer_mse_value = float(layer_mse.detach().cpu())
         payload[f"losses/autoencoder_mse/{safe_name}"] = layer_mse_value
         payload[f"losses/reconstruction_mse/{safe_name}"] = layer_mse_value
@@ -200,7 +201,7 @@ def _log_loss_parts(criterion, payload: dict[str, object]) -> None:
         getattr(criterion, "last_corr_total", torch.tensor(0.0)).detach().cpu()
     )
     for layer_name, layer_loss in getattr(criterion, "last_corr_by_layer", {}).items():
-        safe_name = str(layer_name).replace(".", "__").replace("/", "__")
+        safe_name = wandb_safe_layer_name(str(layer_name))
         payload[f"losses/{safe_name}"] = float(layer_loss.detach().cpu())
 
 

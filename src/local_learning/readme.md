@@ -31,7 +31,7 @@ the logger modules. Keep this updated whenever visualization logging changes.
 - `train-first-layer-reconstruction/vgg16__conv1_1__reconstruction`: image
   grid for the first VGG deconv. Rows are target image, reconstruction, and
   absolute error. Normalized CIFAR/ImageNet inputs are denormalized for display.
-- `train-first-layer-reconstruction/greedy_stacked_autoencoder__layer0__reconstruction`:
+- `train-first-layer-reconstruction/greedy_stacked_autoencoder__layer00__reconstruction`:
   same target/reconstruction/error image grid for the first greedy stacked
   autoencoder layer.
 

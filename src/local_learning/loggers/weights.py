@@ -3,6 +3,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from .names import wandb_safe_layer_name
+
 ConvLike = nn.Conv2d | nn.ConvTranspose2d
 
 
@@ -18,7 +20,7 @@ def _conv_modules(model: nn.Module) -> list[tuple[str, ConvLike]]:
 def _safe_layer_name(module_name: str, module: ConvLike) -> str:
     """Convert a module path to a WandB-friendly layer name."""
     layer_type = "deconv" if isinstance(module, nn.ConvTranspose2d) else "conv"
-    return module_name.replace(".", "__") or layer_type
+    return wandb_safe_layer_name(module_name or layer_type)
 
 
 def _normalize_filter(filter_tensor: torch.Tensor) -> torch.Tensor:
@@ -329,7 +331,7 @@ def log_inference_flops(
         def hook(_module, _inputs, output) -> None:
             if not isinstance(output, torch.Tensor):
                 return
-            safe_name = module_name.replace(".", "__") or module.__class__.__name__.lower()
+            safe_name = wandb_safe_layer_name(module_name or module.__class__.__name__.lower())
             if isinstance(module, nn.Conv2d):
                 payload[f"{prefix}/{safe_name}"] = _conv2d_flops(module, output)
             elif isinstance(module, nn.ConvTranspose2d):

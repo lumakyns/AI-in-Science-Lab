@@ -2,6 +2,8 @@ from typing import Any
 
 import torch
 
+from .names import wandb_safe_layer_name
+
 
 def _parse_feature_map(feature_map_item, *, idx: int) -> tuple[str, torch.Tensor]:
     if isinstance(feature_map_item, torch.Tensor):
@@ -19,7 +21,7 @@ def _parse_feature_map(feature_map_item, *, idx: int) -> tuple[str, torch.Tensor
 
 
 def _safe_layer_name(layer_name: str) -> str:
-    return layer_name.replace(".", "__").replace("/", "__")
+    return wandb_safe_layer_name(layer_name)
 
 
 def _mean_channel_distance_to_geometric_mean(feature_map: torch.Tensor) -> torch.Tensor:
