@@ -67,7 +67,7 @@ def _first_hidden_channel(cfg: dict[str, Any]) -> int:
     return int(hidden_channels[0])
 
 
-def _gsa_hidden_channels(cfg: dict[str, Any]) -> int | list[int] | tuple[int, ...]:
+def _gsa_hidden_channels(cfg: dict[str, Any]) -> int | list[int | str] | tuple[int | str, ...]:
     return cfg["gsa_hidden_channels"] if "gsa_hidden_channels" in cfg else cfg["hidden_channels"]
 
 
