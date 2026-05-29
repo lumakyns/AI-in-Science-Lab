@@ -32,6 +32,22 @@ def _mean_channel_distance_to_geometric_mean(feature_map: torch.Tensor) -> torch
     return (channel_vectors - geometric_mean).norm(dim=1).mean().cpu()
 
 
+def _is_encoder_feature_map(layer_name: str) -> bool:
+    """Return true for encoder/conv feature maps and false for recon/classifier maps."""
+    if layer_name.endswith(".reconstruction"):
+        return False
+    blocked_parts = (".avgpool", ".classifier", ".fc", ".decoder", ".bn", ".relu", ".maxpool")
+    if any(part in layer_name for part in blocked_parts):
+        return False
+    return (
+        ".conv" in layer_name
+        or ".features." in layer_name
+        or ".encoder" in layer_name
+        or layer_name.endswith(".hidden")
+        or (layer_name.startswith("resnet18.layer") and "." in layer_name)
+    )
+
+
 class ChannelActivationStatsLogger:
     """Collect epoch-level activation channel-collapse diagnostics."""
 
@@ -47,6 +63,8 @@ class ChannelActivationStatsLogger:
         for idx, feature_map_item in enumerate(feature_maps):
             layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
             if feature_map.ndim != 4:
+                continue
+            if not _is_encoder_feature_map(layer_name):
                 continue
 
             fmap = feature_map.detach().to(torch.float32)
@@ -166,23 +184,14 @@ def _sample_channel_pairs(
     return sorted(pairs)
 
 
-def _make_sampled_channel_pair_scatter_grid(
+def _draw_channel_pair_scatter_grid(
     channel_means: torch.Tensor,
+    pairs: list[tuple[int, int]],
     *,
-    seed: int,
     grid_size: int = 5,
     cell_size: int = 72,
     padding: int = 8,
-) -> tuple[torch.Tensor, list[tuple[int, int]]]:
-    if channel_means.ndim != 2 or channel_means.shape[1] < 2:
-        raise ValueError("Cannot build a scatter grid with fewer than two channels.")
-
-    max_pairs = grid_size * grid_size
-    pairs = _sample_channel_pairs(
-        int(channel_means.shape[1]),
-        max_pairs=max_pairs,
-        seed=seed,
-    )
+) -> torch.Tensor:
     image = torch.ones(
         3,
         grid_size * cell_size,
@@ -190,7 +199,7 @@ def _make_sampled_channel_pair_scatter_grid(
         dtype=torch.float32,
     )
 
-    for idx, (channel_a, channel_b) in enumerate(pairs):
+    for idx, (channel_a, channel_b) in enumerate(pairs[: grid_size * grid_size]):
         _draw_scatter_cell(
             image,
             row=idx // grid_size,
@@ -201,11 +210,11 @@ def _make_sampled_channel_pair_scatter_grid(
             padding=padding,
         )
 
-    return image, pairs
+    return image
 
 
-def _scatter_seed(layer_name: str, epoch: int | str) -> int:
-    seed_text = f"{layer_name}:{epoch}"
+def _scatter_seed(layer_name: str, run_seed: int) -> int:
+    seed_text = f"{layer_name}:{run_seed}"
     return sum((idx + 1) * ord(char) for idx, char in enumerate(seed_text)) % (2**31)
 
 
@@ -223,12 +232,16 @@ class ChannelActivationScatterLogger:
         self.prefix = prefix
         self.max_points = max(1, int(max_points))
         self._layer_batches: dict[str, list[torch.Tensor]] = {}
+        self._run_seed = int(torch.randint(0, 2**31 - 1, ()).item())
+        self._layer_pairs: dict[str, tuple[int, list[tuple[int, int]]]] = {}
 
     def update(self, feature_maps: list) -> None:
         """Store each image's mean activation per channel for the current batch."""
         for idx, feature_map_item in enumerate(feature_maps):
             layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
             if feature_map.ndim != 4 or feature_map.shape[1] < 2:
+                continue
+            if not _is_encoder_feature_map(layer_name):
                 continue
             channel_means = feature_map.detach().to(torch.float32).mean(dim=(2, 3)).cpu()
             self._layer_batches.setdefault(layer_name, []).append(channel_means)
@@ -247,10 +260,19 @@ class ChannelActivationScatterLogger:
 
             channel_means = channel_means[: self.max_points]
             safe_name = _safe_layer_name(layer_name)
-            scatter, pairs = _make_sampled_channel_pair_scatter_grid(
-                channel_means,
-                seed=_scatter_seed(safe_name, epoch),
-            )
+            channel_count = int(channel_means.shape[1])
+            cached = self._layer_pairs.get(safe_name)
+            if cached is None or cached[0] != channel_count:
+                pairs = _sample_channel_pairs(
+                    channel_count,
+                    max_pairs=25,
+                    seed=_scatter_seed(safe_name, self._run_seed),
+                )
+                self._layer_pairs[safe_name] = (channel_count, pairs)
+            else:
+                pairs = cached[1]
+
+            scatter = _draw_channel_pair_scatter_grid(channel_means, pairs)
             image = scatter.permute(1, 2, 0).numpy()
             payload[f"{self.prefix}/{safe_name}"] = self.wandb.Image(
                 image,
@@ -299,6 +321,8 @@ class FeatureMapDistributionLogger:
             layer_name, feature_map = _parse_feature_map(feature_map_item, idx=idx)
             if feature_map.ndim != 4:
                 continue
+            if not _is_encoder_feature_map(layer_name):
+                continue
             safe_name = _safe_layer_name(layer_name)
             for stat_name, stat_value in _image_channel_distribution_stats(feature_map).items():
                 payload[f"{self.prefix}/{stat_name}/{safe_name}"] = stat_value
@@ -325,25 +349,49 @@ class FirstLayerReconstructionImageLogger:
         self.mean = mean
         self.std = std
 
-    def log_step(self, feature_maps: list, *, step: int) -> dict[str, Any]:
+    def log_step(self, feature_maps: list, *, step: int, model: Any | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {}
+        reconstruction_item = self._find_reconstruction_item(feature_maps)
+        if reconstruction_item is None and model is not None:
+            reconstruction_item = self._find_model_reconstruction_item(model)
+        if reconstruction_item is None:
+            return payload
+
+        name, reconstruction, target = reconstruction_item
+        grid = self._make_grid(
+            target.detach().to(torch.float32).cpu(),
+            reconstruction.detach().to(torch.float32).cpu(),
+        )
+        payload[f"{self.prefix}/{_safe_layer_name(name)}"] = self.wandb.Image(
+            grid.permute(1, 2, 0).numpy(),
+            caption=f"step {step}: rows are target, reconstruction, absolute error",
+        )
+        return payload
+
+    def _find_reconstruction_item(
+        self,
+        feature_maps: list,
+    ) -> tuple[str, torch.Tensor, torch.Tensor] | None:
         for item in feature_maps:
             if not (isinstance(item, (tuple, list)) and len(item) == 3):
                 continue
             name, reconstruction, target = item
             if name != self.layer_name:
                 continue
+            return name, reconstruction, target
+        return None
 
-            grid = self._make_grid(
-                target.detach().to(torch.float32).cpu(),
-                reconstruction.detach().to(torch.float32).cpu(),
-            )
-            payload[f"{self.prefix}/{_safe_layer_name(name)}"] = self.wandb.Image(
-                grid.permute(1, 2, 0).numpy(),
-                caption=f"step {step}: rows are target, reconstruction, absolute error",
-            )
-            break
-        return payload
+    @staticmethod
+    def _find_model_reconstruction_item(model: Any) -> tuple[str, torch.Tensor, torch.Tensor] | None:
+        reconstructions = getattr(model, "last_reconstructions", None)
+        targets = getattr(model, "last_reconstruction_targets", None)
+        if not reconstructions or not targets:
+            return None
+        return (
+            "greedy_stacked_autoencoder.layer0.reconstruction",
+            reconstructions[0],
+            targets[0],
+        )
 
     def _denormalize(self, images: torch.Tensor) -> torch.Tensor:
         if self.mean is None or self.std is None:

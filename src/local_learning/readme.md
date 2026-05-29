@@ -31,21 +31,27 @@ the logger modules. Keep this updated whenever visualization logging changes.
 - `train-first-layer-reconstruction/vgg16__conv1_1__reconstruction`: image
   grid for the first VGG deconv. Rows are target image, reconstruction, and
   absolute error. Normalized CIFAR/ImageNet inputs are denormalized for display.
+- `train-first-layer-reconstruction/greedy_stacked_autoencoder__layer0__reconstruction`:
+  same target/reconstruction/error image grid for the first greedy stacked
+  autoencoder layer.
 
 ### Activation Diagnostics
 
 - `test-activation-channel-pair-scatter/{layer}`: sampled channel-pair
   scatterplot grid. Each point is one image; axes are mean activations for two
-  sampled channels. Used to inspect channel collapse or correlation.
+  sampled channels. Pairs are randomly chosen once per layer and reused for the
+  entire training run. Used to inspect channel collapse or correlation.
 - `test-activation-geometric-mean-distance/{layer}`: average distance of
-  channels from the layer channel centroid. Lower values can suggest channels
-  are becoming more similar.
+  encoder channels from the layer channel centroid. This is only logged for
+  encoder/conv feature maps, not reconstruction, pooling, or classifier outputs.
+  Lower values can suggest channels are becoming more similar.
 
 ### Feature Map Distribution
 
 These are compact scalar summaries per layer. For a feature map shaped like
 `[image, channel, spatial...]`, we first compute each image/channel spatial mean,
-then summarize across images and channels.
+then summarize across images and channels. Decoder/reconstruction feature maps
+are not logged here.
 
 - `train-feature-map-distribution/mean_mean/{layer}`: average, across channels,
   of per-image spatial mean activations.
@@ -65,10 +71,14 @@ then summarize across images and channels.
   `mean_mean`, `mean_stddev`, `stddev_mean`, or `stddev_stddev`.
 - `train-gradient-distribution/{stat}/{layer}`: same four scalar summaries
   for layer gradients.
-- `train-filter-norm-kde-progress/{layer}`: KDE overlay showing how filter
-  norm distributions move over training.
+- `train-filter-norm-kde-progress/{layer}`: image of KDE overlays showing how
+  filter norm distributions move over training.
 
 ### Compute
 
-- `test-flops/{layer}`: estimated per-layer inference FLOPs.
-- `test-flops/total`: estimated total inference FLOPs for one sample.
+- `test-flops/{layer}`: estimated per-layer FLOPs for one sample under the
+  currently active forward mode. For scheduled VGG pretrain epochs, this includes
+  decoder/deconv FLOPs; after the switch to full training, those decoder FLOPs
+  disappear.
+- `test-flops/total`: estimated total FLOPs for one sample under the active
+  forward mode.

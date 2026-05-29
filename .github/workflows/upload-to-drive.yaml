@@ -23,6 +23,7 @@ jobs:
           echo "${{ secrets.GDRIVE_OAUTH }}" | base64 --decode > ~/.config/rclone/rclone.conf
 
       - name: Upload files to Google Drive
+        timeout-minutes: 25
         run: |
           rclone sync ./ "gdrive-personal:Research/AI-In-Science-Lab" \
             --exclude "data/**" \

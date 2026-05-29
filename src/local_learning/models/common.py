@@ -67,6 +67,14 @@ def _first_hidden_channel(cfg: dict[str, Any]) -> int:
     return int(hidden_channels[0])
 
 
+def _gsa_hidden_channels(cfg: dict[str, Any]) -> int | list[int] | tuple[int, ...]:
+    return cfg["gsa_hidden_channels"] if "gsa_hidden_channels" in cfg else cfg["hidden_channels"]
+
+
+def _gsa_num_layers(cfg: dict[str, Any]) -> int:
+    return int(cfg["gsa_num_layers"] if "gsa_num_layers" in cfg else cfg["num_layers"])
+
+
 def get_model(cfg: dict[str, Any]) -> nn.Module:
     """Build the requested model from the experiment config dictionary."""
     from .basic_cnn import BasicCNN1, BasicCNN2
@@ -121,21 +129,21 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 k_lifetime=cfg.get("k_lifetime"),
                 total_epochs=int(cfg["epochs"]),
                 dataset_size=int(cfg.get("dataset_size", 1)),
-                a=float(cfg.get("wta_eval_multiplier", 1.0)),
+                a=float(cfg.get("k_population_alpha", 1.0)),
             )
         case "greedy_stacked_autoencoder":
             return GreedyStackedAutoencoder(
                 dim=input_dim,
-                hidden_channels=cfg["hidden_channels"],
+                hidden_channels=_gsa_hidden_channels(cfg),
                 num_classes=num_classes if cfg["training_mode"] == "classification" else None,
-                num_layers=int(cfg["num_layers"]),
+                num_layers=_gsa_num_layers(cfg),
                 k_spatial=cfg.get("k_spatial"),
                 k_population=cfg.get("k_population"),
                 k_lifetime=cfg.get("k_lifetime"),
                 total_epochs=int(cfg["epochs"]),
                 dataset_size=int(cfg.get("dataset_size", 1)),
-                a=float(cfg.get("wta_eval_multiplier", 1.0)),
-                local_training=False,  # TODO: Remove
+                a=float(cfg.get("k_population_alpha", 1.0)),
+                local_training=bool(cfg.get("gsa_local_training", False)),
             )
         case _:
             raise ValueError(f"Unknown architecture_type={architecture_type!r}.")

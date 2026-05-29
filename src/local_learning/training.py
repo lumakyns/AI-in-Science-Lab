@@ -115,18 +115,24 @@ def get_loaders(cfg: dict[str, Any], device: torch.device) -> tuple[DataLoader, 
 
 def get_config_name(cfg: dict[str, Any]) -> str:
     """Create a concise WandB run name from the main experiment settings."""
-    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
-    vgg16_mode = (
-        "manual"
-        if first_full_epoch is None
-        else f"full_epoch_{first_full_epoch}"
-    )
+    architecture_mode = ""
+    if cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
+        first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
+        vgg16_mode = (
+            "manual"
+            if first_full_epoch is None
+            else f"full_epoch_{first_full_epoch}"
+        )
+        architecture_mode = f"-vgg16_{vgg16_mode}"
+    elif cfg["architecture_type"] == "greedy_stacked_autoencoder":
+        architecture_mode = f"-gsa_local_{bool(cfg.get('gsa_local_training', False))}"
+
     return (
         f"{cfg['training_mode']}"
         f"-{cfg['architecture_type']}"
         f"-{cfg['data']}"
         f"-{cfg['loss_type']}"
-        f"-vgg16_{vgg16_mode}"
+        f"{architecture_mode}"
         f"-lr_{cfg['learning_rate']}"
     )
 
@@ -392,6 +398,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     first_layer_reconstruction_logger.log_step(
                         feature_maps,
                         step=global_step,
+                        model=model,
                     )
                 )
                 if hasattr(model, "last_k"):
@@ -414,6 +421,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                         forward_kwargs = {
                             "epoch": epoch,
                             "inputs_processed_in_epoch": inputs_processed_in_epoch,
+                        }
+                    elif cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
+                        deconv_training, local_training = _vgg16_forward_flags(cfg, epoch=epoch)
+                        forward_kwargs = {
+                            "deconv_training": deconv_training,
+                            "local_training": local_training,
                         }
                     log_payload.update(
                         log_inference_flops(model, xb, forward_kwargs=forward_kwargs)

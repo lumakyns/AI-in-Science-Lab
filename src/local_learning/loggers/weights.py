@@ -110,6 +110,82 @@ def _kde_density_on_x(values: torch.Tensor, xs: torch.Tensor) -> list[float]:
     return density.tolist()
 
 
+def _plot_lines_to_image(
+    xs: torch.Tensor,
+    ys: list[list[float]],
+    *,
+    width: int = 480,
+    height: int = 320,
+    padding: int = 36,
+) -> torch.Tensor:
+    image = torch.ones(3, height, width, dtype=torch.float32)
+    if xs.numel() == 0 or not ys:
+        return image
+
+    y_tensors = [torch.tensor(y, dtype=torch.float32) for y in ys if y]
+    if not y_tensors:
+        return image
+
+    x_min = float(xs.amin())
+    x_max = float(xs.amax())
+    y_min = 0.0
+    y_max = float(torch.cat(y_tensors).amax())
+    if x_max == x_min or y_max <= y_min:
+        return image
+
+    axis_color = torch.tensor([0.72, 0.74, 0.76], dtype=image.dtype)
+    image[:, height - padding, padding : width - padding] = axis_color[:, None]
+    image[:, padding : height - padding, padding] = axis_color[:, None]
+
+    colors = (
+        torch.tensor([0.08, 0.32, 0.72]),
+        torch.tensor([0.82, 0.20, 0.18]),
+        torch.tensor([0.20, 0.58, 0.26]),
+        torch.tensor([0.55, 0.32, 0.72]),
+        torch.tensor([0.90, 0.55, 0.12]),
+        torch.tensor([0.16, 0.60, 0.66]),
+        torch.tensor([0.55, 0.55, 0.55]),
+        torch.tensor([0.20, 0.20, 0.20]),
+    )
+    plot_w = max(1, width - (2 * padding) - 1)
+    plot_h = max(1, height - (2 * padding) - 1)
+
+    for line_idx, y_values in enumerate(y_tensors):
+        color = colors[line_idx % len(colors)].to(image.dtype)
+        x_pixels = padding + ((xs - x_min) / (x_max - x_min) * plot_w).round().to(torch.long)
+        y_pixels = height - padding - ((y_values - y_min) / (y_max - y_min) * plot_h).round().to(torch.long)
+        points = zip(x_pixels.tolist(), y_pixels.tolist())
+        previous: tuple[int, int] | None = None
+        for x_pixel, y_pixel in points:
+            x_pixel = min(max(0, x_pixel), width - 1)
+            y_pixel = min(max(0, y_pixel), height - 1)
+            if previous is None:
+                image[:, y_pixel, x_pixel] = color
+            else:
+                _draw_line(image, previous, (x_pixel, y_pixel), color)
+            previous = (x_pixel, y_pixel)
+
+    return image
+
+
+def _draw_line(
+    image: torch.Tensor,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    color: torch.Tensor,
+) -> None:
+    x0, y0 = start
+    x1, y1 = end
+    steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+    for step in range(steps + 1):
+        t = step / steps
+        x = round(x0 + ((x1 - x0) * t))
+        y = round(y0 + ((y1 - y0) * t))
+        y_slice = slice(max(0, y - 1), min(image.shape[1], y + 2))
+        x_slice = slice(max(0, x - 1), min(image.shape[2], x + 2))
+        image[:, y_slice, x_slice] = color[:, None, None]
+
+
 def log_conv_weight_snapshot(
     model: nn.Module,
     wandb_module: Any,
@@ -203,12 +279,13 @@ class ConvNormKDEHistoryLogger:
         if not ys or any(not y for y in ys):
             return payload
 
-        payload[f"{self.prefix}/{safe_name}"] = self.wandb.plot.line_series(
-            xs=xs.tolist(),
-            ys=ys,
-            keys=[f"step_{snapshot_step}" for snapshot_step, _ in layer_history],
-            title=f"{safe_name} filter norm KDE over training",
-            xname="filter_norm",
+        image = _plot_lines_to_image(xs, ys)
+        payload[f"{self.prefix}/{safe_name}"] = self.wandb.Image(
+            image.permute(1, 2, 0).numpy(),
+            caption=(
+                f"{safe_name} filter norm KDE over training; "
+                f"lines are steps {[snapshot_step for snapshot_step, _ in layer_history]}"
+            ),
         )
         return payload
 
