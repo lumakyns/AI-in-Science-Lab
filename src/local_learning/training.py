@@ -12,8 +12,8 @@ from loggers import (
     ChannelActivationScatterLogger,
     ChannelActivationStatsLogger,
     ConvNormKDEHistoryLogger,
-    ConvWeightChangeLogger,
     FeatureMapDistributionLogger,
+    FirstLayerReconstructionImageLogger,
     log_conv_weight_snapshot,
     log_inference_flops,
 )
@@ -34,6 +34,12 @@ DEFAULT_WEIGHT_LOG_EVERY_STEPS = 100
 DEFAULT_FLOP_LOG_EVERY_STEPS = 100
 DEFAULT_MAX_EVAL_BATCHES = 25
 DEFAULT_ACTIVATION_VIZ_BATCHES = 1
+NORMALIZATION_STATS = {
+    "cifar10": ((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    "smallcifar10": ((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    "cifar100": ((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+    "imagenet": ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+}
 
 
 def _parse_data_config(data: str) -> tuple[str, str]:
@@ -52,6 +58,15 @@ def _training_mode_for_architecture(architecture_type: str) -> str:
     if architecture_type in RECONSTRUCTION_ARCHITECTURES:
         return "reconstruction"
     raise ValueError(f"Unknown architecture_type={architecture_type!r}.")
+
+
+def _normalization_stats_for_config(
+    cfg: dict[str, Any],
+) -> tuple[tuple[float, ...], tuple[float, ...]] | tuple[None, None]:
+    if cfg.get("preprocessing") != "normalize":
+        return None, None
+    dataset = str(cfg["dataset"]).removesuffix("_patches")
+    return NORMALIZATION_STATS.get(dataset, (None, None))
 
 
 def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -298,13 +313,15 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     eval_interval_steps = max(1, len(train_loader) // 4)
     # Stateful loggers accumulate snapshots between WandB writes.
     activation_scatter_logger = ChannelActivationScatterLogger(wandb)
-    activation_stats_logger = ChannelActivationStatsLogger(
-        zero_threshold=float(cfg.get("activation_zero_threshold", 1e-6)),
-        dominant_share_multiplier=float(cfg.get("activation_dominant_share_multiplier", 2.0)),
-    )
-    weight_change_logger = ConvWeightChangeLogger(model)
+    activation_stats_logger = ChannelActivationStatsLogger()
     norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
     feature_map_distribution_logger = FeatureMapDistributionLogger(wandb)
+    reconstruction_mean, reconstruction_std = _normalization_stats_for_config(cfg)
+    first_layer_reconstruction_logger = FirstLayerReconstructionImageLogger(
+        wandb,
+        mean=reconstruction_mean,
+        std=reconstruction_std,
+    )
 
     def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
         # Capture feature-map summaries without affecting training mode.
@@ -371,6 +388,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 log_payload.update(
                     feature_map_distribution_logger.log_step(feature_maps)
                 )
+                log_payload.update(
+                    first_layer_reconstruction_logger.log_step(
+                        feature_maps,
+                        step=global_step,
+                    )
+                )
                 if hasattr(model, "last_k"):
                     log_payload["general/last_k"] = int(model.last_k)
                 _log_loss_parts(criterion, log_payload)
@@ -397,14 +420,6 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     )
 
             optimizer.step()
-
-            # Weight drift is measured after the optimizer update.
-            if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
-                weight_change_payload = weight_change_logger.log(model)
-                if weight_change_payload:
-                    if log_payload is None:
-                        log_payload = {}
-                    log_payload.update(weight_change_payload)
 
             if log_payload is not None:
                 wandb_log(run, log_payload)

@@ -33,20 +33,14 @@ def _mean_channel_distance_to_geometric_mean(feature_map: torch.Tensor) -> torch
 
 
 class ChannelActivationStatsLogger:
-    """Collect epoch-level activation sparsity and channel collapse diagnostics."""
+    """Collect epoch-level activation channel-collapse diagnostics."""
 
     def __init__(
         self,
         *,
-        prefix: str = "viz-test-activation-epoch",
-        distance_prefix: str = "viz-test-activation-geometric-mean-distance",
-        zero_threshold: float = 1e-6,
-        dominant_share_multiplier: float = 2.0,
+        distance_prefix: str = "test-activation-geometric-mean-distance",
     ) -> None:
-        self.prefix = prefix
         self.distance_prefix = distance_prefix
-        self.zero_threshold = zero_threshold
-        self.dominant_share_multiplier = dominant_share_multiplier
         self._stats: dict[str, dict[str, torch.Tensor]] = {}
 
     def update(self, feature_maps: list) -> None:
@@ -56,28 +50,15 @@ class ChannelActivationStatsLogger:
                 continue
 
             fmap = feature_map.detach().to(torch.float32)
-            reduce_dims = (0, 2, 3)
-            zero_count = (fmap.abs() <= self.zero_threshold).sum(dim=reduce_dims).cpu()
-            total_count = torch.full_like(
-                zero_count,
-                fmap.shape[0] * fmap.shape[2] * fmap.shape[3],
-            )
-            activation_mass = fmap.abs().sum(dim=reduce_dims).cpu()
             mean_geometric_distance = _mean_channel_distance_to_geometric_mean(fmap)
 
             if layer_name not in self._stats:
                 self._stats[layer_name] = {
-                    "zero_count": zero_count,
-                    "total_count": total_count,
-                    "activation_mass": activation_mass,
                     "geometric_distance_sum": mean_geometric_distance,
                     "geometric_distance_count": torch.tensor(1),
                 }
                 continue
 
-            self._stats[layer_name]["zero_count"] += zero_count
-            self._stats[layer_name]["total_count"] += total_count
-            self._stats[layer_name]["activation_mass"] += activation_mass
             self._stats[layer_name]["geometric_distance_sum"] += mean_geometric_distance
             self._stats[layer_name]["geometric_distance_count"] += 1
 
@@ -86,28 +67,10 @@ class ChannelActivationStatsLogger:
 
         for layer_name, stats in self._stats.items():
             safe_name = _safe_layer_name(layer_name)
-            zero_count = stats["zero_count"]
-            total_count = stats["total_count"].clamp_min(1)
-            activation_mass = stats["activation_mass"]
             mean_geometric_distance = stats["geometric_distance_sum"] / stats[
                 "geometric_distance_count"
             ].clamp_min(1)
 
-            sparsity = zero_count / total_count
-            mass_total = activation_mass.sum()
-            if float(mass_total) > 0.0:
-                mass_share = activation_mass / mass_total
-            else:
-                mass_share = torch.zeros_like(activation_mass)
-
-            channel_count = max(1, int(activation_mass.numel()))
-            dominant_threshold = self.dominant_share_multiplier / channel_count
-            dominant_channels = mass_share >= dominant_threshold
-
-            payload[f"{self.prefix}-sparsity/{safe_name}"] = sparsity
-            payload[f"{self.prefix}-dominant-mass-share/{safe_name}"] = float(
-                mass_share[dominant_channels].sum()
-            )
             payload[f"{self.distance_prefix}/{safe_name}"] = float(mean_geometric_distance)
 
         self.reset()
@@ -253,7 +216,7 @@ class ChannelActivationScatterLogger:
         self,
         wandb_module: Any,
         *,
-        prefix: str = "viz-test-activation-channel-pair-scatter",
+        prefix: str = "test-activation-channel-pair-scatter",
         max_points: int = 256,
     ) -> None:
         self.wandb = wandb_module
@@ -325,7 +288,7 @@ class FeatureMapDistributionLogger:
         self,
         wandb_module: Any,
         *,
-        prefix: str = "viz-train-feature-map-distribution",
+        prefix: str = "train-feature-map-distribution",
     ) -> None:
         self.wandb = wandb_module
         self.prefix = prefix
@@ -340,3 +303,86 @@ class FeatureMapDistributionLogger:
             for stat_name, stat_value in _image_channel_distribution_stats(feature_map).items():
                 payload[f"{self.prefix}/{stat_name}/{safe_name}"] = stat_value
         return payload
+
+
+class FirstLayerReconstructionImageLogger:
+    """Log target/reconstruction/error image grids for the first VGG deconv."""
+
+    def __init__(
+        self,
+        wandb_module: Any,
+        *,
+        prefix: str = "train-first-layer-reconstruction",
+        layer_name: str = "vgg16.conv1_1.reconstruction",
+        max_images: int = 4,
+        mean: tuple[float, ...] | None = None,
+        std: tuple[float, ...] | None = None,
+    ) -> None:
+        self.wandb = wandb_module
+        self.prefix = prefix
+        self.layer_name = layer_name
+        self.max_images = max(1, int(max_images))
+        self.mean = mean
+        self.std = std
+
+    def log_step(self, feature_maps: list, *, step: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for item in feature_maps:
+            if not (isinstance(item, (tuple, list)) and len(item) == 3):
+                continue
+            name, reconstruction, target = item
+            if name != self.layer_name:
+                continue
+
+            grid = self._make_grid(
+                target.detach().to(torch.float32).cpu(),
+                reconstruction.detach().to(torch.float32).cpu(),
+            )
+            payload[f"{self.prefix}/{_safe_layer_name(name)}"] = self.wandb.Image(
+                grid.permute(1, 2, 0).numpy(),
+                caption=f"step {step}: rows are target, reconstruction, absolute error",
+            )
+            break
+        return payload
+
+    def _denormalize(self, images: torch.Tensor) -> torch.Tensor:
+        if self.mean is None or self.std is None:
+            return images
+        mean = torch.tensor(self.mean, dtype=images.dtype).view(1, -1, 1, 1)
+        std = torch.tensor(self.std, dtype=images.dtype).view(1, -1, 1, 1)
+        return (images * std) + mean
+
+    def _make_grid(self, target: torch.Tensor, reconstruction: torch.Tensor) -> torch.Tensor:
+        image_count = min(self.max_images, int(target.shape[0]), int(reconstruction.shape[0]))
+        target = self._to_rgb(self._denormalize(target[:image_count]).clamp(0.0, 1.0))
+        reconstruction = self._to_rgb(
+            self._denormalize(reconstruction[:image_count]).clamp(0.0, 1.0)
+        )
+        error = self._to_rgb((target - reconstruction).abs().clamp(0.0, 1.0))
+        tiles = torch.cat([target, reconstruction, error], dim=0)
+        return self._tile_rows(tiles, rows=3, cols=image_count)
+
+    @staticmethod
+    def _to_rgb(images: torch.Tensor) -> torch.Tensor:
+        if images.shape[1] == 1:
+            return images.repeat(1, 3, 1, 1)
+        if images.shape[1] >= 3:
+            return images[:, :3]
+        raise ValueError(f"Expected at least 1 image channel, got shape {tuple(images.shape)}.")
+
+    @staticmethod
+    def _tile_rows(images: torch.Tensor, *, rows: int, cols: int, padding: int = 2) -> torch.Tensor:
+        _, channels, height, width = images.shape
+        grid = torch.ones(
+            channels,
+            rows * height + (rows - 1) * padding,
+            cols * width + (cols - 1) * padding,
+            dtype=images.dtype,
+        )
+        for idx, image in enumerate(images):
+            row = idx // cols
+            col = idx % cols
+            y0 = row * (height + padding)
+            x0 = col * (width + padding)
+            grid[:, y0 : y0 + height, x0 : x0 + width] = image
+        return grid

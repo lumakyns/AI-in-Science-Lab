@@ -116,9 +116,9 @@ def log_conv_weight_snapshot(
     norm_kde_history_logger: "ConvNormKDEHistoryLogger",
     *,
     step: int,
-    filter_grid_prefix: str = "viz-test-filter-grid",
-    distribution_prefix: str = "viz-train-encoder-weight-distribution",
-    gradient_prefix: str = "viz-train-gradient-distribution",
+    filter_grid_prefix: str = "test-filter-grid",
+    distribution_prefix: str = "train-encoder-weight-distribution",
+    gradient_prefix: str = "train-gradient-distribution",
 ) -> dict[str, Any]:
     """Log weight diagnostics in one pass over conv/deconv modules."""
     payload: dict[str, Any] = {}
@@ -155,7 +155,7 @@ class ConvNormKDEHistoryLogger:
         self,
         wandb_module: Any,
         *,
-        prefix: str = "viz-train-filter-norm-kde-progress",
+        prefix: str = "train-filter-norm-kde-progress",
         max_snapshots: int = 12,
         points: int = 64,
     ) -> None:
@@ -213,74 +213,6 @@ class ConvNormKDEHistoryLogger:
         return payload
 
 
-class ConvWeightChangeLogger:
-    """Track conv/deconv weight update size and cosine drift from snapshots."""
-
-    def __init__(self, model: nn.Module) -> None:
-        self._initial_weights = self._snapshot(model)
-        self._previous_weights = {
-            name: weight.clone()
-            for name, weight in self._initial_weights.items()
-        }
-
-    def log(
-        self,
-        model: nn.Module,
-        *,
-        update_prefix: str = "viz-train-relative-update",
-        init_drift_prefix: str = "viz-train-cosine-drift-from-init",
-        last_drift_prefix: str = "viz-train-cosine-drift-since-last-log",
-    ) -> dict[str, float]:
-        payload: dict[str, float] = {}
-        current_weights = self._snapshot(model)
-
-        for module_name, current_weight in current_weights.items():
-            previous_weight = self._previous_weights.get(module_name)
-            initial_weight = self._initial_weights.get(module_name)
-            if previous_weight is None or initial_weight is None:
-                continue
-
-            safe_name = module_name.replace(".", "__") or "conv"
-            payload[f"{update_prefix}/{safe_name}"] = _relative_update(
-                current_weight,
-                previous_weight,
-            )
-            payload[f"{init_drift_prefix}/{safe_name}"] = _cosine_drift(
-                current_weight,
-                initial_weight,
-            )
-            payload[f"{last_drift_prefix}/{safe_name}"] = _cosine_drift(
-                current_weight,
-                previous_weight,
-            )
-
-        self._previous_weights = {
-            name: weight.clone()
-            for name, weight in current_weights.items()
-        }
-        return payload
-
-    @staticmethod
-    def _snapshot(model: nn.Module) -> dict[str, torch.Tensor]:
-        return {
-            module_name: _conv_filter_bank(module).detach().to(torch.float32).flatten().cpu()
-            for module_name, module in _conv_modules(model)
-        }
-
-
-def _relative_update(current_weight: torch.Tensor, previous_weight: torch.Tensor) -> float:
-    denom = previous_weight.norm().clamp_min(1e-12)
-    return float((current_weight - previous_weight).norm() / denom)
-
-
-def _cosine_drift(current_weight: torch.Tensor, reference_weight: torch.Tensor) -> float:
-    denom = current_weight.norm() * reference_weight.norm()
-    if float(denom) == 0.0:
-        return 0.0
-    cosine_similarity = torch.dot(current_weight, reference_weight) / denom
-    return float(1.0 - cosine_similarity.clamp(-1.0, 1.0))
-
-
 def _conv2d_flops(module: nn.Conv2d, output: torch.Tensor) -> int:
     """Estimate multiply-add FLOPs for one Conv2d output tensor."""
     batch_size, out_channels, out_h, out_w = output.shape
@@ -308,7 +240,7 @@ def log_inference_flops(
     sample_input: torch.Tensor,
     *,
     forward_kwargs: dict[str, Any] | None = None,
-    prefix: str = "viz-test-flops",
+    prefix: str = "test-flops",
 ) -> dict[str, int]:
     """Run one eval forward pass with hooks and log estimated conv/deconv/linear FLOPs."""
     payload: dict[str, int] = {}
