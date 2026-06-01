@@ -124,7 +124,7 @@ class LayerCaptureMixin:
 
 def get_num_classes(dataset: str) -> int:
     """Map supported dataset names to their classifier output widths."""
-    match dataset.removesuffix("_patches"):
+    match dataset.removesuffix("_patches").removesuffix("_val_subset"):
         case "cifar10" | "smallcifar10":
             return 10
         case "cifar100":
@@ -133,9 +133,9 @@ def get_num_classes(dataset: str) -> int:
             return 1000
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', 'imagenet_val_subset', "
                 "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
-                "'smallcifar10_patches', or 'imagenet_patches'."
+                "'smallcifar10_patches', 'imagenet_patches', or 'imagenet_val_subset_patches'."
             )
 
 
@@ -144,15 +144,21 @@ def get_input_dim(dataset: str) -> tuple[int, int, int]:
     match dataset:
         case "cifar10" | "smallcifar10" | "cifar100":
             return (3, 32, 32)
-        case "imagenet":
+        case "imagenet" | "imagenet_val_subset":
             return (3, 224, 224)
-        case "cifar10_patches" | "smallcifar10_patches" | "cifar100_patches" | "imagenet_patches":
+        case (
+            "cifar10_patches"
+            | "smallcifar10_patches"
+            | "cifar100_patches"
+            | "imagenet_patches"
+            | "imagenet_val_subset_patches"
+        ):
             return (3, 8, 8)
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', 'imagenet_val_subset', "
                 "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
-                "'smallcifar10_patches', or 'imagenet_patches'."
+                "'smallcifar10_patches', 'imagenet_patches', or 'imagenet_val_subset_patches'."
             )
 
 

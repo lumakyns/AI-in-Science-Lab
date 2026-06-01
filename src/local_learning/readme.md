@@ -12,6 +12,9 @@ visualization stack is archived in `old_readme.md`.
 - `weights`: selects initialization. Use `random` for random initialization or
   `default` for the torchvision default weights. `default` is currently
   supported for `vgg16`, `resnet18`, and `densenet121`.
+- `imagenet_val_subset`: dataset option that uses only the ImageNet validation
+  archive plus devkit, then deterministically splits a 5k-image subset into
+  train/test views. It does not require the ImageNet train archive.
 - `frozen`: when `True`, no model parameters are trained and the model stays in
   eval mode during the epoch.
 - Sparse WTA/GSA settings live in `K_BASE_CONFIG`: `k_spatial`, `k_population`,

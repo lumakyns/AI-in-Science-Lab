@@ -16,6 +16,8 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 PATCHES_PER_IMAGE = 5
 PATCH_SIZE = 8
 SMALL_CIFAR10_FRACTION = 0.1
+IMAGENET_VAL_SUBSET_SIZE = 5000
+IMAGENET_VAL_SUBSET_TRAIN_FRACTION = 0.8
 
 
 def local_contrast_normalize(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -129,8 +131,23 @@ def stratified_subset(dataset: Dataset, *, fraction: float, seed: int = 0) -> Su
     return Subset(dataset, sorted(indices))
 
 
+def deterministic_subset(dataset: Dataset, *, size: int, train: bool, seed: int = 0) -> Subset:
+    """Split a deterministic subset into train/test views without requiring train archives."""
+    if size <= 0:
+        raise ValueError("size must be positive.")
+    subset_size = min(int(size), len(dataset))
+    generator = torch.Generator().manual_seed(seed)
+    indices = torch.randperm(len(dataset), generator=generator)[:subset_size]
+    split_idx = max(1, int(round(subset_size * IMAGENET_VAL_SUBSET_TRAIN_FRACTION)))
+    split_idx = min(split_idx, subset_size - 1) if subset_size > 1 else subset_size
+    selected = indices[:split_idx] if train else indices[split_idx:]
+    if selected.numel() == 0:
+        selected = indices[:1]
+    return Subset(dataset, sorted(selected.tolist()))
+
+
 def _base_dataset_name(dataset: str) -> str:
-    return dataset.removesuffix("_patches")
+    return dataset.removesuffix("_patches").removesuffix("_val_subset")
 
 
 def _is_patch_dataset(dataset: str) -> bool:
@@ -147,9 +164,9 @@ def _dataset_cls(dataset: str):
             return datasets.ImageNet
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', 'imagenet_val_subset', "
                 "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
-                "'smallcifar10_patches', or 'imagenet_patches'."
+                "'smallcifar10_patches', 'imagenet_patches', or 'imagenet_val_subset_patches'."
             )
 
 
@@ -163,9 +180,9 @@ def _normalization_stats(dataset: str) -> tuple[tuple[float, ...], tuple[float, 
             return IMAGENET_MEAN, IMAGENET_STD
         case _:
             raise ValueError(
-                "dataset must be 'cifar10', 'cifar100', 'imagenet', "
+                "dataset must be 'cifar10', 'cifar100', 'imagenet', 'imagenet_val_subset', "
                 "'smallcifar10', 'cifar10_patches', 'cifar100_patches', "
-                "'smallcifar10_patches', or 'imagenet_patches'."
+                "'smallcifar10_patches', 'imagenet_patches', or 'imagenet_val_subset_patches'."
             )
 
 
@@ -192,6 +209,14 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
     dataset_cls = _dataset_cls(dataset)
     base_dataset = _base_dataset_name(dataset)
     if base_dataset == "imagenet":
+        if dataset.removesuffix("_patches") == "imagenet_val_subset":
+            val_dataset = dataset_cls(str(DATA_DIR / "imagenet"), split="val", transform=transform)
+            return deterministic_subset(
+                val_dataset,
+                size=IMAGENET_VAL_SUBSET_SIZE,
+                train=train,
+                seed=0,
+            )
         split = "train" if train else "val"
         return dataset_cls(str(DATA_DIR / "imagenet"), split=split, transform=transform)
     cifar_dataset = dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
