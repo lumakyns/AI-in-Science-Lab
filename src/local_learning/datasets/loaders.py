@@ -9,7 +9,12 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR_CANDIDATES = (
+    REPO_ROOT / "data",
+    PACKAGE_ROOT / "data",
+)
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
@@ -21,11 +26,29 @@ PATCH_SIZE = 8
 SMALL_CIFAR10_FRACTION = 0.1
 IMAGENET_VAL_SUBSET_SIZE = 5000
 IMAGENET_VAL_SUBSET_TRAIN_FRACTION = 0.8
-IMAGENET_ROOT = DATA_DIR / "imagenet"
-IMAGENET_META_FILE = IMAGENET_ROOT / "meta.bin"
-IMAGENET_VAL_ARCHIVE = DATA_DIR / "val_blurred.tar.gz"
-IMAGENET_VAL_DEVKIT = DATA_DIR / "val_devkit.json.gz"
-IMAGENET_VAL_ANNOTATIONS = DATA_DIR / "face_annotations_ILSVRC.json"
+
+
+def _format_dir_contents(path: Path) -> str:
+    if not path.exists():
+        return f"{path} does not exist"
+    if not path.is_dir():
+        return f"{path} exists but is not a directory"
+    contents = sorted(child.name for child in path.iterdir())
+    if not contents:
+        return f"{path} is empty"
+    return f"{path} contains: {', '.join(contents[:30])}"
+
+
+def _data_dir() -> Path:
+    for path in DATA_DIR_CANDIDATES:
+        if (path / "val_blurred.tar.gz").exists() or (path / "val_devkit.json.gz").exists():
+            return path
+    return DATA_DIR_CANDIDATES[0]
+
+
+def _missing_file_error(label: str, path: Path) -> FileNotFoundError:
+    searched = "\n".join(f"- {_format_dir_contents(candidate)}" for candidate in DATA_DIR_CANDIDATES)
+    return FileNotFoundError(f"Missing {label}: {path}\nSearched data folders:\n{searched}")
 
 
 def local_contrast_normalize(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -166,36 +189,41 @@ def _safe_extract_tar(archive: Path, destination: Path) -> None:
 
 def _prepare_imagenet_val_subset() -> None:
     """Prepare local ImageNet validation archives for torchvision.datasets.ImageNet."""
-    if not IMAGENET_VAL_ANNOTATIONS.exists():
-        if not IMAGENET_VAL_DEVKIT.exists():
-            raise FileNotFoundError(
-                f"Missing ImageNet validation devkit: {IMAGENET_VAL_DEVKIT}"
-            )
-        with gzip.open(IMAGENET_VAL_DEVKIT, "rb") as source:
-            with IMAGENET_VAL_ANNOTATIONS.open("wb") as destination:
+    data_dir = _data_dir()
+    imagenet_root = data_dir / "imagenet"
+    imagenet_meta_file = imagenet_root / "meta.bin"
+    imagenet_val_archive = data_dir / "val_blurred.tar.gz"
+    imagenet_val_devkit = data_dir / "val_devkit.json.gz"
+    imagenet_val_annotations = data_dir / "face_annotations_ILSVRC.json"
+
+    if not imagenet_val_annotations.exists():
+        if not imagenet_val_devkit.exists():
+            raise _missing_file_error("ImageNet validation devkit", imagenet_val_devkit)
+        with gzip.open(imagenet_val_devkit, "rb") as source:
+            with imagenet_val_annotations.open("wb") as destination:
                 shutil.copyfileobj(source, destination)
 
-    val_root = IMAGENET_ROOT / "val"
+    val_root = imagenet_root / "val"
     has_val_classes = val_root.exists() and any(path.is_dir() for path in val_root.iterdir())
     if not has_val_classes:
-        if not IMAGENET_VAL_ARCHIVE.exists():
-            raise FileNotFoundError(f"Missing ImageNet validation archive: {IMAGENET_VAL_ARCHIVE}")
-        IMAGENET_ROOT.mkdir(parents=True, exist_ok=True)
-        _safe_extract_tar(IMAGENET_VAL_ARCHIVE, IMAGENET_ROOT)
-        extracted_root = IMAGENET_ROOT / "val_blurred"
+        if not imagenet_val_archive.exists():
+            raise _missing_file_error("ImageNet validation archive", imagenet_val_archive)
+        imagenet_root.mkdir(parents=True, exist_ok=True)
+        _safe_extract_tar(imagenet_val_archive, imagenet_root)
+        extracted_root = imagenet_root / "val_blurred"
         if extracted_root.exists() and val_root.exists() and not any(val_root.iterdir()):
             val_root.rmdir()
         if extracted_root.exists() and not val_root.exists():
             extracted_root.rename(val_root)
 
-    if not IMAGENET_META_FILE.exists():
+    if not imagenet_meta_file.exists():
         if not val_root.exists():
             raise RuntimeError(f"Expected ImageNet validation folder at {val_root}")
         wnids = sorted(path.name for path in val_root.iterdir() if path.is_dir())
         if not wnids:
             raise RuntimeError(f"No ImageNet class folders found in {val_root}")
         wnid_to_classes = {wnid: (wnid,) for wnid in wnids}
-        torch.save((wnid_to_classes, []), IMAGENET_META_FILE)
+        torch.save((wnid_to_classes, []), imagenet_meta_file)
 
 
 def _base_dataset_name(dataset: str) -> str:
@@ -261,9 +289,10 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
     dataset_cls = _dataset_cls(dataset)
     base_dataset = _base_dataset_name(dataset)
     if base_dataset == "imagenet":
+        imagenet_root = _data_dir() / "imagenet"
         if dataset.removesuffix("_patches") == "imagenet_val_subset":
             _prepare_imagenet_val_subset()
-            val_dataset = dataset_cls(str(IMAGENET_ROOT), split="val", transform=transform)
+            val_dataset = dataset_cls(str(imagenet_root), split="val", transform=transform)
             return deterministic_subset(
                 val_dataset,
                 size=IMAGENET_VAL_SUBSET_SIZE,
@@ -271,8 +300,8 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
                 seed=0,
             )
         split = "train" if train else "val"
-        return dataset_cls(str(IMAGENET_ROOT), split=split, transform=transform)
-    cifar_dataset = dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
+        return dataset_cls(str(imagenet_root), split=split, transform=transform)
+    cifar_dataset = dataset_cls(str(_data_dir()), train=train, download=True, transform=transform)
     if base_dataset == "smallcifar10":
         return stratified_subset(
             cifar_dataset,
