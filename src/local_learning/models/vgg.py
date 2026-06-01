@@ -154,7 +154,7 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
 
     def _source_vgg16_for_dataset(self) -> nn.Module:
         """Return the torchvision ImageNet VGG-16 source used for transfer learning."""
-        base_dataset = self.dataset.removesuffix("_patches")
+        base_dataset = self.dataset.removesuffix("_patches").removesuffix("_val_subset")
         match base_dataset:
             case "imagenet" | "cifar10" | "smallcifar10" | "cifar100":
                 return vgg16(weights=VGG16_Weights.DEFAULT)
