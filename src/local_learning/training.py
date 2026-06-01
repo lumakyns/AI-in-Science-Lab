@@ -130,7 +130,9 @@ def _weight_mean_line_image(
     height: int = 720,
 ) -> Image.Image:
     dpi = 100
-    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    plot_width = max(width, 72 * max(1, len(names)))
+    plot_height = max(height, 840 if len(names) > 20 else height)
+    fig, ax = plt.subplots(figsize=(plot_width / dpi, plot_height / dpi), dpi=dpi)
     x = np.arange(len(names))
     y = values.detach().cpu().numpy()
 
@@ -138,29 +140,39 @@ def _weight_mean_line_image(
     ax.set_ylabel("Weight mean")
     ax.set_xlabel("Layer")
     ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=60, ha="right", fontsize=8)
+    ax.set_xticklabels(names, rotation=75, ha="right", fontsize=7)
     ax.grid(axis="y", color="#d8dde5", linewidth=0.8)
+    ax.margins(x=0.02)
 
     if values.numel() > 0:
         y_min = float(values.amin())
         y_max = float(values.amax())
         y_span = y_max - y_min
-        y_offset = (y_span * 0.04) if y_span else 0.04
-        for idx, (name, value) in enumerate(zip(names, y.tolist(), strict=True)):
-            ax.annotate(
-                name,
-                xy=(idx, value),
-                xytext=(0, 8 if idx % 2 == 0 else -14),
-                textcoords="offset points",
-                ha="center",
-                va="bottom" if idx % 2 == 0 else "top",
-                fontsize=7,
-                rotation=35,
-                color="#23272f",
-            )
+        y_offset = (y_span * 0.16) if y_span else 0.08
+        if len(names) <= 40:
+            label_offsets = (18, 34, 50, -18, -34, -50)
+            for idx, (name, value) in enumerate(zip(names, y.tolist(), strict=True)):
+                offset = label_offsets[idx % len(label_offsets)]
+                ax.annotate(
+                    name,
+                    xy=(idx, value),
+                    xytext=(0, offset),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom" if offset > 0 else "top",
+                    fontsize=6,
+                    rotation=25,
+                    color="#23272f",
+                    bbox={
+                        "boxstyle": "round,pad=0.15",
+                        "facecolor": "white",
+                        "edgecolor": "#d8dde5",
+                        "alpha": 0.85,
+                    },
+                )
         ax.set_ylim(y_min - y_offset, y_max + y_offset)
 
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.06, right=0.99, top=0.96, bottom=0.36)
     buffer = BytesIO()
     fig.savefig(buffer, format="png", dpi=dpi)
     plt.close(fig)
@@ -338,7 +350,9 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     log_every_steps = int(cfg["log_every_steps"])
     eval_interval_steps = max(1, len(train_loader) // 4)
 
-    for epoch in tqdm(range(int(cfg["epochs"])), desc="Epochs"):
+    num_epochs = int(cfg["epochs"])
+    total_train_examples = len(train_loader.dataset)
+    for epoch in range(num_epochs):
         if hasattr(model, "clear_stats"):
             model.clear_stats()
         if frozen:
@@ -347,7 +361,13 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             model.train()
         inputs_processed_in_epoch = 0
 
+        progress = tqdm(
+            total=total_train_examples,
+            desc=f"Epoch {epoch + 1}/{num_epochs}",
+            unit="example",
+        )
         for step_in_epoch, (xb, yb) in enumerate(train_loader):
+            batch_size = int(xb.shape[0])
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
             if optimizer is not None:
@@ -385,8 +405,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             if log_payload is not None:
                 wandb_log(run, log_payload)
 
-            batch_size = int(xb.shape[0])
             inputs_processed_in_epoch += batch_size
+            progress.update(batch_size)
+            progress.set_postfix(
+                examples=f"{inputs_processed_in_epoch}/{total_train_examples}",
+                device=device.type,
+            )
             global_step += 1
 
             if (step_in_epoch + 1) % eval_interval_steps == 0:
@@ -396,6 +420,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     model.eval()
                 else:
                     model.train()
+        progress.close()
         wandb_log(
             run,
             _weight_mean_payload(
