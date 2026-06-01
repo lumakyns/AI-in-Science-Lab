@@ -1,8 +1,14 @@
+from io import BytesIO
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import wandb
-from PIL import Image, ImageDraw
+from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -116,87 +122,50 @@ def wandb_log(run: Any, payload: dict[str, object]) -> None:
         run.log(payload)
 
 
-def _draw_line(
-    draw: ImageDraw.ImageDraw,
-    start: tuple[int, int],
-    end: tuple[int, int],
-    color: tuple[int, int, int],
-) -> None:
-    draw.line((start, end), fill=color, width=4)
-
-
-def _draw_rotated_label(
-    image: Image.Image,
-    text: str,
-    position: tuple[int, int],
-    *,
-    fill: tuple[int, int, int],
-) -> None:
-    label = Image.new("RGBA", (260, 32), (255, 255, 255, 0))
-    label_draw = ImageDraw.Draw(label)
-    label_draw.text((0, 0), text, fill=fill)
-    rotated = label.rotate(60, expand=True)
-    image.paste(rotated, position, rotated)
-
-
 def _weight_mean_line_image(
     values: torch.Tensor,
     names: list[str],
     *,
     width: int = 1440,
     height: int = 720,
-) -> torch.Tensor:
-    image = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(image)
-    if values.numel() == 0:
-        return torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
+) -> Image.Image:
+    dpi = 100
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    x = np.arange(len(names))
+    y = values.detach().cpu().numpy()
 
-    left = 120
-    right = 36
-    top = 36
-    bottom = 210
-    axis_color = (178, 184, 191)
-    grid_color = (226, 230, 235)
-    line_color = (20, 82, 184)
-    text_color = (35, 39, 47)
-    x_axis_y = height - bottom
-    plot_right = width - right
-    plot_top = top
-    draw.line((left, x_axis_y, plot_right, x_axis_y), fill=axis_color, width=2)
-    draw.line((left, plot_top, left, x_axis_y), fill=axis_color, width=2)
+    ax.plot(x, y, marker="o", linewidth=2.0, markersize=5.0, color="#1452b8")
+    ax.set_ylabel("Weight mean")
+    ax.set_xlabel("Layer")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, rotation=60, ha="right", fontsize=8)
+    ax.grid(axis="y", color="#d8dde5", linewidth=0.8)
 
-    y_min = float(values.amin())
-    y_max = float(values.amax())
-    if y_min == y_max:
-        y_min -= 1.0
-        y_max += 1.0
+    if values.numel() > 0:
+        y_min = float(values.amin())
+        y_max = float(values.amax())
+        y_span = y_max - y_min
+        y_offset = (y_span * 0.04) if y_span else 0.04
+        for idx, (name, value) in enumerate(zip(names, y.tolist(), strict=True)):
+            ax.annotate(
+                name,
+                xy=(idx, value),
+                xytext=(0, 8 if idx % 2 == 0 else -14),
+                textcoords="offset points",
+                ha="center",
+                va="bottom" if idx % 2 == 0 else "top",
+                fontsize=7,
+                rotation=35,
+                color="#23272f",
+            )
+        ax.set_ylim(y_min - y_offset, y_max + y_offset)
 
-    plot_w = max(1, plot_right - left)
-    plot_h = max(1, x_axis_y - plot_top)
-    denom = max(1, values.numel() - 1)
-    tick_count = 5
-    for tick_idx in range(tick_count):
-        tick_fraction = tick_idx / (tick_count - 1)
-        tick_value = y_min + ((y_max - y_min) * tick_fraction)
-        y = x_axis_y - round(tick_fraction * plot_h)
-        draw.line((left - 8, y, left, y), fill=axis_color, width=2)
-        draw.line((left, y, plot_right, y), fill=grid_color, width=1)
-        draw.text((8, y - 8), f"{tick_value:.3g}", fill=text_color)
-
-    points: list[tuple[int, int]] = []
-    for idx, value in enumerate(values.tolist()):
-        x = left + round((idx / denom) * plot_w)
-        y = x_axis_y - round(((value - y_min) / (y_max - y_min)) * plot_h)
-        points.append((x, y))
-        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=line_color)
-        draw.line((x, x_axis_y, x, x_axis_y + 7), fill=axis_color, width=2)
-        label = names[idx] if idx < len(names) else str(idx)
-        _draw_rotated_label(image, label, (x - 8, x_axis_y + 8), fill=text_color)
-
-    for idx, point in enumerate(points):
-        if idx > 0:
-            _draw_line(draw, points[idx - 1], point, line_color)
-    return torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
+    fig.tight_layout()
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=dpi)
+    plt.close(fig)
+    buffer.seek(0)
+    return Image.open(buffer).convert("RGB")
 
 
 def _weight_mean_payload(model: torch.nn.Module, *, model_type: str, phase: str) -> dict[str, object]:
@@ -219,7 +188,7 @@ def _weight_mean_payload(model: torch.nn.Module, *, model_type: str, phase: str)
     )
     return {
         f"weight-mean/{model_type}": wandb.Image(
-            image.permute(1, 2, 0).numpy(),
+            image,
             caption=f"{phase}: {caption}",
         )
     }
