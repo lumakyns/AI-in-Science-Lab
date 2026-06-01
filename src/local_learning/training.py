@@ -59,8 +59,8 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         raise KeyError("config must define data, e.g. 'cifar10:whiten'.")
 
     cfg["weights"] = str(cfg.get("weights", "random"))
-    if cfg["weights"] not in {"default", "random"}:
-        raise ValueError("weights must be 'default' or 'random'.")
+    if cfg["weights"] not in {"default", "pretrained", "random"}:
+        raise ValueError("weights must be 'default', 'pretrained', or 'random'.")
     cfg["training_mode"] = _training_mode_for_architecture(str(cfg["architecture_type"]))
     return cfg
 

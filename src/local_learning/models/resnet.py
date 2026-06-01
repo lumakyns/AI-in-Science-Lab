@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision.models import ResNet18_Weights, resnet18
 
-from .common import FeatureMapEntry, LayerCaptureMixin
+from .common import FeatureMapEntry, LayerCaptureMixin, load_torchvision_state_dict
 
 
 class BasicBlock(nn.Module):
@@ -154,7 +154,10 @@ class TorchvisionResNet18(LayerCaptureMixin, nn.Module):
 
     def _load_torchvision_weights(self) -> None:
         """Copy ResNet-18 weights from torchvision, keeping this model's final layer shape."""
-        source = resnet18(weights=ResNet18_Weights.DEFAULT)
+        source = resnet18(weights=None)
+        source.load_state_dict(
+            load_torchvision_state_dict("resnet18", ResNet18_Weights.DEFAULT)
+        )
         source_to_local = (
             (source.conv1, self.conv1),
             (source.bn1, self.bn1),

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torchvision.models import DenseNet121_Weights, densenet121
 from torchvision.models.densenet import _DenseBlock, _Transition
 
-from .common import FeatureMapEntry, LayerCaptureMixin
+from .common import FeatureMapEntry, LayerCaptureMixin, load_torchvision_state_dict
 
 
 class TorchvisionDenseNet121(LayerCaptureMixin, nn.Module):
@@ -99,7 +99,10 @@ class TorchvisionDenseNet121(LayerCaptureMixin, nn.Module):
 
     def _load_torchvision_weights(self) -> None:
         """Copy DenseNet-121 weights from torchvision, keeping this model's final layer shape."""
-        source = densenet121(weights=DenseNet121_Weights.DEFAULT)
+        source = densenet121(weights=None)
+        source.load_state_dict(
+            load_torchvision_state_dict("densenet121", DenseNet121_Weights.DEFAULT)
+        )
         source_to_local = (
             (source.features.conv0, self.conv0),
             (source.features.norm0, self.norm0),

@@ -10,8 +10,10 @@ visualization stack is archived in `old_readme.md`.
 - `architecture_type`: selects the model family, for example `vgg16`,
   `resnet18`, or `densenet121`.
 - `weights`: selects initialization. Use `random` for random initialization or
-  `default` for the torchvision default weights. `default` is currently
-  supported for `vgg16`, `resnet18`, and `densenet121`.
+  `default`/`pretrained` for the torchvision default ImageNet weights.
+  Pretrained weights are cached under `src/local_learning/model_weights/`.
+  `default`/`pretrained` is currently supported for `vgg16`, `resnet18`, and
+  `densenet121`.
 - `imagenet_val_subset`: dataset option that uses only the ImageNet validation
   archive plus devkit, then deterministically splits a 5k-image subset into
   train/test views. It does not require the ImageNet train archive.

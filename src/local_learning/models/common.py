@@ -1,7 +1,14 @@
+import logging
+from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urlparse
 
 import torch
 import torch.nn as nn
+
+
+LOGGER = logging.getLogger(__name__)
+PRETRAINED_WEIGHTS_DIR = Path(__file__).resolve().parents[1] / "model_weights"
 
 
 class FeatureMapEntry(NamedTuple):
@@ -122,6 +129,34 @@ class LayerCaptureMixin:
         self._feature_map_stats = {}
 
 
+def load_torchvision_state_dict(model_name: str, weights: Any) -> dict[str, torch.Tensor]:
+    """Load torchvision weights through the project-local pretrained weights cache."""
+    PRETRAINED_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    cached_path = _torchvision_cached_weight_path(weights)
+    if cached_path is not None and cached_path.exists():
+        LOGGER.info("[%s] Loading pretrained weights from %s", model_name, cached_path)
+    else:
+        LOGGER.info("[%s] Downloading pretrained weights to %s", model_name, PRETRAINED_WEIGHTS_DIR)
+
+    state_dict = weights.get_state_dict(
+        progress=True,
+        check_hash=True,
+        model_dir=str(PRETRAINED_WEIGHTS_DIR),
+    )
+
+    loaded_path = cached_path if cached_path is not None else PRETRAINED_WEIGHTS_DIR
+    LOGGER.info("[%s] Loaded pretrained weights from %s", model_name, loaded_path)
+    return state_dict
+
+
+def _torchvision_cached_weight_path(weights: Any) -> Path | None:
+    url = getattr(weights, "url", "")
+    filename = Path(urlparse(url).path).name
+    if not filename:
+        return None
+    return PRETRAINED_WEIGHTS_DIR / filename
+
+
 def get_num_classes(dataset: str) -> int:
     """Map supported dataset names to their classifier output widths."""
     match dataset.removesuffix("_patches").removesuffix("_val_subset"):
@@ -188,15 +223,15 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
     architecture_type = cfg["architecture_type"]
     weights = str(cfg.get("weights", "random"))
     match weights:
-        case "default":
+        case "default" | "pretrained":
             use_default_weights = True
         case "random":
             use_default_weights = False
         case _:
-            raise ValueError("weights must be 'default' or 'random'.")
+            raise ValueError("weights must be 'default', 'pretrained', or 'random'.")
     if use_default_weights and architecture_type not in {"vgg16", "resnet18", "densenet121"}:
         raise ValueError(
-            "weights='default' is only supported for architecture_type in "
+            "weights='default'/'pretrained' is only supported for architecture_type in "
             "{'vgg16', 'resnet18', 'densenet121'}."
         )
 

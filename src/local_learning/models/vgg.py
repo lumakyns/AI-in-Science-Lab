@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision.models import VGG16_Weights, vgg16
 
-from .common import FeatureMapEntry, LayerCaptureMixin
+from .common import FeatureMapEntry, LayerCaptureMixin, load_torchvision_state_dict
 
 
 class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
@@ -157,7 +157,11 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         base_dataset = self.dataset.removesuffix("_patches").removesuffix("_val_subset")
         match base_dataset:
             case "imagenet" | "cifar10" | "smallcifar10" | "cifar100":
-                return vgg16(weights=VGG16_Weights.DEFAULT)
+                source = vgg16(weights=None)
+                source.load_state_dict(
+                    load_torchvision_state_dict("vgg16", VGG16_Weights.DEFAULT)
+                )
+                return source
             case _:
                 raise ValueError(f"Unsupported VGG-16 pretrained dataset source: {self.dataset!r}.")
 
