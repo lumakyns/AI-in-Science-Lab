@@ -1,5 +1,5 @@
-from .basic_cnn import BasicCNN1, BasicCNN2
-from .common import FeatureMapEntry, get_model, get_num_classes
+from .common import FeatureMapEntry, Module, get_model, get_num_classes
+from .densenet import TorchvisionDenseNet121
 from .greedy_stacked_autoencoder import GreedyStackedAutoencoder
 from .resnet import TorchvisionResNet18
 from .vgg import TorchvisionVGG16

@@ -15,7 +15,6 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         freeze_backbone: bool = False,
         deconv_training: bool = False,
         local_training: bool = False,
-        small: bool = False,
     ) -> None:
         """Local VGG-16 layout with optional torchvision weight transfer and capture hooks."""
         super().__init__()
@@ -23,7 +22,6 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         self.dataset = dataset
         self.deconv_training = bool(deconv_training)
         self.local_training = bool(local_training)
-        self.small = bool(small)
 
         self.conv1_1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
         self.relu1_1 = nn.ReLU(inplace=True)
@@ -74,28 +72,16 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         self.deconv5_3 = nn.ConvTranspose2d(512, 512, kernel_size=3, padding=1)
         self.pool5 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1) if self.small else (7, 7))
-        classifier_in_features = 256 if self.small else 512 * 7 * 7
-        if self.small:
-            self.classifier_fc1 = nn.Identity()
-            self.classifier_relu1 = nn.Identity()
-            self.classifier_dropout1 = nn.Identity()
-            self.classifier_fc2 = nn.Identity()
-            self.classifier_relu2 = nn.Identity()
-            self.classifier_dropout2 = nn.Identity()
-            self.classifier_fc3 = nn.Linear(classifier_in_features, num_classes)
-        else:
-            self.classifier_fc1 = nn.Linear(classifier_in_features, 4096)
-            self.classifier_relu1 = nn.ReLU(True)
-            self.classifier_dropout1 = nn.Dropout()
-            self.classifier_fc2 = nn.Linear(4096, 4096)
-            self.classifier_relu2 = nn.ReLU(True)
-            self.classifier_dropout2 = nn.Dropout()
-            self.classifier_fc3 = nn.Linear(4096, num_classes)
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.classifier_fc1 = nn.Linear(512 * 7 * 7, 4096)
+        self.classifier_relu1 = nn.ReLU(True)
+        self.classifier_dropout1 = nn.Dropout()
+        self.classifier_fc2 = nn.Linear(4096, 4096)
+        self.classifier_relu2 = nn.ReLU(True)
+        self.classifier_dropout2 = nn.Dropout()
+        self.classifier_fc3 = nn.Linear(4096, num_classes)
 
         self._initialize_weights()
-        if pretrained and self.small:
-            raise ValueError("pretrained_vgg16 does not support vgg16_small=True.")
         if pretrained:
             self._load_torchvision_weights()
 
@@ -140,7 +126,7 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def _load_torchvision_weights(self) -> None:
-        """Copy dataset-selected VGG-16 weights, keeping this model's final layer shape."""
+        """Copy torchvision VGG-16 weights, keeping this model's final layer shape."""
         source = self._source_vgg16_for_dataset()
         source_to_local = (
             (source.features[0], self.conv1_1),
@@ -167,16 +153,11 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
                 local_module.bias.data.copy_(source_module.bias.data)
 
     def _source_vgg16_for_dataset(self) -> nn.Module:
-        """Select the pretrained VGG-16 source implied by the configured dataset."""
+        """Return the torchvision ImageNet VGG-16 source used for transfer learning."""
         base_dataset = self.dataset.removesuffix("_patches")
         match base_dataset:
-            case "imagenet":
+            case "imagenet" | "cifar10" | "smallcifar10" | "cifar100":
                 return vgg16(weights=VGG16_Weights.DEFAULT)
-            case "cifar10" | "smallcifar10" | "cifar100":
-                raise ValueError(
-                    f"pretrained_vgg16 requested for {base_dataset!r}, but no built-in "
-                    "CIFAR VGG-16 weight source is configured yet."
-                )
             case _:
                 raise ValueError(f"Unsupported VGG-16 pretrained dataset source: {self.dataset!r}.")
 
@@ -228,43 +209,6 @@ class TorchvisionVGG16(LayerCaptureMixin, nn.Module):
         self._forward_feature_maps = []
         use_deconvs = self.deconv_training if deconv_training is None else bool(deconv_training)
         use_local = self.local_training if local_training is None else bool(local_training)
-
-        if self.small:
-            if use_local:
-                x = x.detach()
-            conv_input = x
-            x = self.conv1_1(x)
-            if use_deconvs:
-                self._forward_feature_maps.append(
-                    ("vgg16.conv1_1.reconstruction", self.deconv1_1(x.clone()), conv_input.detach())
-                )
-            x = self.relu1_1(x)
-            x = self.pool1(x)
-
-            if use_local:
-                x = x.detach()
-            conv_input = x
-            x = self.conv2_1(x)
-            if use_deconvs:
-                self._forward_feature_maps.append(
-                    ("vgg16.conv2_1.reconstruction", self.deconv2_1(x.clone()), conv_input.detach())
-                )
-            x = self.relu2_1(x)
-            x = self.pool2(x)
-
-            if use_local:
-                x = x.detach()
-            conv_input = x
-            x = self.conv3_1(x)
-            if use_deconvs:
-                self._forward_feature_maps.append(
-                    ("vgg16.conv3_1.reconstruction", self.deconv3_1(x.clone()), conv_input.detach())
-                )
-            x = self.relu3_1(x)
-            x = self.pool3(x)
-
-            logits = self._classifier_forward(x)
-            return logits, self._forward_feature_maps
 
         if use_local:
             x = x.detach()

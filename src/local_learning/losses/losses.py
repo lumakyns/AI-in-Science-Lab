@@ -326,20 +326,14 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
     training_mode = cfg["training_mode"]
     loss_type = cfg["loss_type"]
     architecture_type = cfg["architecture_type"]
-    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
-    vgg16_deconv_training = (
-        bool(cfg.get("vgg16_deconv_training", False))
-        if first_full_epoch is None
-        else int(first_full_epoch) > 0
-    )
-    local_reconstruction_training = vgg16_deconv_training or (
+    local_reconstruction_training = (
         architecture_type == "greedy_stacked_autoencoder"
         and bool(cfg.get("gsa_local_training", False))
     )
     reconstruction_strength = (
         cfg.get("gsa_local_reconstruction_strength")
         if architecture_type == "greedy_stacked_autoencoder"
-        else cfg.get("vgg16_local_reconstruction_strength", cfg.get("local_reconstruction_strength", 1.0))
+        else cfg.get("local_reconstruction_strength", 1.0)
     )
     if reconstruction_strength is None:
         reconstruction_strength = cfg.get("local_reconstruction_strength", 1.0)

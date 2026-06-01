@@ -8,39 +8,18 @@ from tqdm.auto import tqdm
 from datasets import get_dataset
 from losses import get_loss
 from models import get_model
-from loggers import (
-    ChannelActivationScatterLogger,
-    ChannelActivationStatsLogger,
-    ConvNormKDEHistoryLogger,
-    FeatureMapDistributionLogger,
-    FirstLayerReconstructionImageLogger,
-    log_conv_weight_snapshot,
-    log_inference_flops,
-)
 from loggers.names import wandb_safe_layer_name
 
 
 CLASSIFICATION_ARCHITECTURES = {
-    "cnn1",
-    "cnn2",
+    "densenet121",
     "resnet18",
-    "pretrained_resnet18",
     "vgg16",
-    "pretrained_vgg16",
     "greedy_stacked_autoencoder",
 }
 RECONSTRUCTION_ARCHITECTURES = {"wta_conv_ae"}
 DEFAULT_PREPROCESSING = "none"
-DEFAULT_WEIGHT_LOG_EVERY_STEPS = 100
-DEFAULT_FLOP_LOG_EVERY_STEPS = 100
 DEFAULT_MAX_EVAL_BATCHES = 25
-DEFAULT_ACTIVATION_VIZ_BATCHES = 1
-NORMALIZATION_STATS = {
-    "cifar10": ((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-    "smallcifar10": ((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-    "cifar100": ((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-    "imagenet": ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-}
 
 
 def _parse_data_config(data: str) -> tuple[str, str]:
@@ -61,15 +40,6 @@ def _training_mode_for_architecture(architecture_type: str) -> str:
     raise ValueError(f"Unknown architecture_type={architecture_type!r}.")
 
 
-def _normalization_stats_for_config(
-    cfg: dict[str, Any],
-) -> tuple[tuple[float, ...], tuple[float, ...]] | tuple[None, None]:
-    if cfg.get("preprocessing") != "normalize":
-        return None, None
-    dataset = str(cfg["dataset"]).removesuffix("_patches")
-    return NORMALIZATION_STATS.get(dataset, (None, None))
-
-
 def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     """Fill derived config fields used internally by training, models, and losses."""
     cfg = dict(config)
@@ -81,6 +51,9 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     else:
         raise KeyError("config must define data, e.g. 'cifar10:whiten'.")
 
+    cfg["weights"] = str(cfg.get("weights", "random"))
+    if cfg["weights"] not in {"default", "random"}:
+        raise ValueError("weights must be 'default' or 'random'.")
     cfg["training_mode"] = _training_mode_for_architecture(str(cfg["architecture_type"]))
     return cfg
 
@@ -117,21 +90,14 @@ def get_loaders(cfg: dict[str, Any], device: torch.device) -> tuple[DataLoader, 
 def get_config_name(cfg: dict[str, Any]) -> str:
     """Create a concise WandB run name from the main experiment settings."""
     architecture_mode = ""
-    if cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
-        first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
-        vgg16_mode = (
-            "manual"
-            if first_full_epoch is None
-            else f"full_epoch_{first_full_epoch}"
-        )
-        architecture_mode = f"-vgg16_{vgg16_mode}"
-    elif cfg["architecture_type"] == "greedy_stacked_autoencoder":
+    if cfg["architecture_type"] == "greedy_stacked_autoencoder":
         architecture_mode = f"-gsa_local_{bool(cfg.get('gsa_local_training', False))}"
 
     return (
         f"{cfg['training_mode']}"
         f"-{cfg['architecture_type']}"
         f"-{cfg['data']}"
+        f"-weights_{cfg['weights']}"
         f"-{cfg['loss_type']}"
         f"{architecture_mode}"
         f"-lr_{cfg['learning_rate']}"
@@ -147,6 +113,83 @@ def wandb_log(run: Any, payload: dict[str, object]) -> None:
     """Log one already-batched payload to W&B."""
     if payload:
         run.log(payload)
+
+
+def _draw_line(
+    image: torch.Tensor,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    color: torch.Tensor,
+) -> None:
+    x0, y0 = start
+    x1, y1 = end
+    steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+    for step in range(steps + 1):
+        t = step / steps
+        x = round(x0 + ((x1 - x0) * t))
+        y = round(y0 + ((y1 - y0) * t))
+        y_slice = slice(max(0, y - 1), min(image.shape[1], y + 2))
+        x_slice = slice(max(0, x - 1), min(image.shape[2], x + 2))
+        image[:, y_slice, x_slice] = color[:, None, None]
+
+
+def _weight_mean_line_image(values: torch.Tensor, *, width: int = 720, height: int = 360) -> torch.Tensor:
+    image = torch.ones(3, height, width, dtype=torch.float32)
+    if values.numel() == 0:
+        return image
+
+    padding = 44
+    axis_color = torch.tensor([0.70, 0.72, 0.74], dtype=torch.float32)
+    line_color = torch.tensor([0.08, 0.32, 0.72], dtype=torch.float32)
+    image[:, height - padding, padding : width - padding] = axis_color[:, None]
+    image[:, padding : height - padding, padding] = axis_color[:, None]
+
+    y_min = float(values.amin())
+    y_max = float(values.amax())
+    if y_min == y_max:
+        y_min -= 1.0
+        y_max += 1.0
+
+    plot_w = max(1, width - (2 * padding) - 1)
+    plot_h = max(1, height - (2 * padding) - 1)
+    denom = max(1, values.numel() - 1)
+    points: list[tuple[int, int]] = []
+    for idx, value in enumerate(values.tolist()):
+        x = padding + round((idx / denom) * plot_w)
+        y = height - padding - round(((value - y_min) / (y_max - y_min)) * plot_h)
+        points.append((x, y))
+
+    for idx, point in enumerate(points):
+        if idx == 0:
+            image[:, point[1], point[0]] = line_color
+            continue
+        _draw_line(image, points[idx - 1], point, line_color)
+    return image
+
+
+def _weight_mean_payload(model: torch.nn.Module, *, model_type: str, phase: str) -> dict[str, object]:
+    if not hasattr(model, "get_weights"):
+        return {}
+
+    weight_modules = model.get_weights()
+    if not weight_modules:
+        return {}
+
+    means = torch.tensor(
+        [float(module.tensor.detach().to(torch.float32).mean().cpu()) for module in weight_modules],
+        dtype=torch.float32,
+    )
+    image = _weight_mean_line_image(means)
+    caption = " | ".join(
+        f"{module.name}: {value:.4g}"
+        for module, value in zip(weight_modules, means.tolist(), strict=True)
+    )
+    return {
+        f"weight-mean/{model_type}": wandb.Image(
+            image.permute(1, 2, 0).numpy(),
+            caption=f"{phase}: {caption}",
+        )
+    }
 
 
 def _loss_value(
@@ -205,30 +248,6 @@ def _log_loss_parts(criterion, payload: dict[str, object]) -> None:
         payload[f"losses/{safe_name}"] = float(layer_loss.detach().cpu())
 
 
-def _vgg16_first_full_training_epoch(cfg: dict[str, Any]) -> int | None:
-    first_full_epoch = cfg.get("vgg16_first_full_training_epoch")
-    return None if first_full_epoch is None else int(first_full_epoch)
-
-
-def _vgg16_pretrain_mode(cfg: dict[str, Any], *, epoch: int) -> bool:
-    if cfg["architecture_type"] not in {"vgg16", "pretrained_vgg16"}:
-        return False
-    first_full_epoch = _vgg16_first_full_training_epoch(cfg)
-    return first_full_epoch is not None and epoch < first_full_epoch
-
-
-def _vgg16_forward_flags(cfg: dict[str, Any], *, epoch: int) -> tuple[bool, bool]:
-    first_full_epoch = _vgg16_first_full_training_epoch(cfg)
-    if first_full_epoch is None:
-        return (
-            bool(cfg.get("vgg16_deconv_training", False)),
-            bool(cfg.get("vgg16_local_training", False)),
-        )
-
-    pretrain_mode = _vgg16_pretrain_mode(cfg, epoch=epoch)
-    return pretrain_mode, pretrain_mode
-
-
 def _forward_model(
     cfg: dict[str, Any],
     model: torch.nn.Module,
@@ -243,13 +262,6 @@ def _forward_model(
             xb,
             epoch=epoch,
             inputs_processed_in_epoch=inputs_processed_in_epoch,
-        )
-    if cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
-        deconv_training, local_training = _vgg16_forward_flags(cfg, epoch=epoch)
-        return model(
-            xb,
-            deconv_training=deconv_training,
-            local_training=local_training,
         )
     return model(xb)
 
@@ -269,11 +281,19 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
     # Model, loss, and optimizer all come from the normalized config.
     model = get_model(cfg).to(device)
+    frozen = bool(cfg.get("frozen", False))
+    if frozen:
+        for param in model.parameters():
+            param.requires_grad = False
+
     criterion = get_loss(cfg).to(device)
-    optimizer = torch.optim.Adam(
-        [param for param in model.parameters() if param.requires_grad],
-        lr=float(cfg["learning_rate"]),
+    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    optimizer = (
+        torch.optim.Adam(trainable_params, lr=float(cfg["learning_rate"]))
+        if trainable_params
+        else None
     )
+    wandb_log(run, _weight_mean_payload(model, model_type=str(cfg["architecture_type"]), phase="initial"))
 
     def eval_model(epoch: int) -> dict[str, float]:
         # Run a bounded validation pass to keep logging cost predictable.
@@ -314,76 +334,37 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
     global_step = 0
     log_every_steps = int(cfg["log_every_steps"])
-    weight_log_every_steps = DEFAULT_WEIGHT_LOG_EVERY_STEPS
-    flop_log_every_steps = DEFAULT_FLOP_LOG_EVERY_STEPS
-    activation_viz_batches = DEFAULT_ACTIVATION_VIZ_BATCHES
     eval_interval_steps = max(1, len(train_loader) // 4)
-    # Stateful loggers accumulate snapshots between WandB writes.
-    activation_scatter_logger = ChannelActivationScatterLogger(wandb)
-    activation_stats_logger = ChannelActivationStatsLogger()
-    norm_kde_history_logger = ConvNormKDEHistoryLogger(wandb)
-    feature_map_distribution_logger = FeatureMapDistributionLogger(wandb)
-    reconstruction_mean, reconstruction_std = _normalization_stats_for_config(cfg)
-    first_layer_reconstruction_logger = FirstLayerReconstructionImageLogger(
-        wandb,
-        mean=reconstruction_mean,
-        std=reconstruction_std,
-    )
-
-    def log_activation_viz_snapshot(epoch: int | str) -> dict[str, Any]:
-        # Capture feature-map summaries without affecting training mode.
-        if activation_viz_batches == 0:
-            return {}
-
-        was_training = model.training
-        activation_scatter_logger.reset()
-        activation_stats_logger.reset()
-        model.eval()
-        with torch.no_grad():
-            for batch_idx, (xb, _yb) in enumerate(test_loader):
-                if batch_idx >= activation_viz_batches:
-                    break
-                xb = xb.to(device, non_blocking=True)
-                _output, feature_maps = _forward_model(
-                    cfg,
-                    model,
-                    xb,
-                    epoch=0 if isinstance(epoch, str) else epoch,
-                    inputs_processed_in_epoch=0,
-                )
-                activation_scatter_logger.update(feature_maps)
-                activation_stats_logger.update(feature_maps)
-
-        payload = {}
-        payload.update(activation_scatter_logger.log_epoch(epoch=epoch))
-        payload.update(activation_stats_logger.log_epoch())
-        if was_training:
-            model.train()
-        return payload
-
-    wandb_log(run, log_activation_viz_snapshot(epoch="initial"))
 
     for epoch in tqdm(range(int(cfg["epochs"])), desc="Epochs"):
-        model.train()
+        if hasattr(model, "clear_stats"):
+            model.clear_stats()
+        if frozen:
+            model.eval()
+        else:
+            model.train()
         inputs_processed_in_epoch = 0
 
         for step_in_epoch, (xb, yb) in enumerate(train_loader):
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
-            optimizer.zero_grad(set_to_none=True)
+            if optimizer is not None:
+                optimizer.zero_grad(set_to_none=True)
 
             # Some models need epoch/sample counts for sparsity annealing.
-            output, feature_maps = _forward_model(
-                cfg,
-                model,
-                xb,
-                epoch=epoch,
-                inputs_processed_in_epoch=inputs_processed_in_epoch,
-            )
+            with torch.set_grad_enabled(not frozen):
+                output, feature_maps = _forward_model(
+                    cfg,
+                    model,
+                    xb,
+                    epoch=epoch,
+                    inputs_processed_in_epoch=inputs_processed_in_epoch,
+                )
 
-            # Route outputs through the correct classification/reconstruction loss.
-            loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
-            loss.backward()
+                # Route outputs through the correct classification/reconstruction loss.
+                loss = _loss_value(cfg, criterion, output, xb, yb, feature_maps)
+                if optimizer is not None:
+                    loss.backward()
 
             log_payload: dict[str, object] | None = None
             if global_step % log_every_steps == 0:
@@ -392,48 +373,12 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     "train/loss": float(loss.detach().cpu()),
                 }
                 log_payload.update(_metric_payload(cfg, criterion, output, yb))
-                log_payload.update(
-                    feature_map_distribution_logger.log_step(feature_maps)
-                )
-                log_payload.update(
-                    first_layer_reconstruction_logger.log_step(
-                        feature_maps,
-                        step=global_step,
-                        model=model,
-                    )
-                )
                 if hasattr(model, "last_k"):
                     log_payload["general/last_k"] = int(model.last_k)
                 _log_loss_parts(criterion, log_payload)
 
-                if weight_log_every_steps > 0 and global_step % weight_log_every_steps == 0:
-                    log_payload.update(
-                        log_conv_weight_snapshot(
-                            model,
-                            wandb,
-                            norm_kde_history_logger,
-                            step=global_step,
-                        )
-                    )
-
-                if flop_log_every_steps > 0 and global_step % flop_log_every_steps == 0:
-                    forward_kwargs = {}
-                    if cfg["architecture_type"] in {"wta_conv_ae", "greedy_stacked_autoencoder"}:
-                        forward_kwargs = {
-                            "epoch": epoch,
-                            "inputs_processed_in_epoch": inputs_processed_in_epoch,
-                        }
-                    elif cfg["architecture_type"] in {"vgg16", "pretrained_vgg16"}:
-                        deconv_training, local_training = _vgg16_forward_flags(cfg, epoch=epoch)
-                        forward_kwargs = {
-                            "deconv_training": deconv_training,
-                            "local_training": local_training,
-                        }
-                    log_payload.update(
-                        log_inference_flops(model, xb, forward_kwargs=forward_kwargs)
-                    )
-
-            optimizer.step()
+            if optimizer is not None:
+                optimizer.step()
 
             if log_payload is not None:
                 wandb_log(run, log_payload)
@@ -445,9 +390,18 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             if (step_in_epoch + 1) % eval_interval_steps == 0:
                 metrics = eval_model(epoch)
                 wandb_log(run, metrics)
-
-        wandb_log(run, log_activation_viz_snapshot(epoch=epoch))
-
+                if frozen:
+                    model.eval()
+                else:
+                    model.train()
+        wandb_log(
+            run,
+            _weight_mean_payload(
+                model,
+                model_type=str(cfg["architecture_type"]),
+                phase=f"epoch_{epoch}",
+            ),
+        )
     metrics = eval_model(int(cfg["epochs"]) - 1)
     run.finish()
     return metrics
