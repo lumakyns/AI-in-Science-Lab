@@ -1,3 +1,6 @@
+import gzip
+import shutil
+import tarfile
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +21,11 @@ PATCH_SIZE = 8
 SMALL_CIFAR10_FRACTION = 0.1
 IMAGENET_VAL_SUBSET_SIZE = 5000
 IMAGENET_VAL_SUBSET_TRAIN_FRACTION = 0.8
+IMAGENET_ROOT = DATA_DIR / "imagenet"
+IMAGENET_META_FILE = IMAGENET_ROOT / "meta.bin"
+IMAGENET_VAL_ARCHIVE = DATA_DIR / "val_blurred.tar.gz"
+IMAGENET_VAL_DEVKIT = DATA_DIR / "val_devkit.gz"
+IMAGENET_VAL_ANNOTATIONS = DATA_DIR / "face_annotations_ILSVRC.json"
 
 
 def local_contrast_normalize(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -146,6 +154,48 @@ def deterministic_subset(dataset: Dataset, *, size: int, train: bool, seed: int 
     return Subset(dataset, sorted(selected.tolist()))
 
 
+def _safe_extract_tar(archive: Path, destination: Path) -> None:
+    destination = destination.resolve()
+    with tarfile.open(archive, "r:*") as tar:
+        for member in tar.getmembers():
+            target = (destination / member.name).resolve()
+            if destination != target and destination not in target.parents:
+                raise RuntimeError(f"Refusing to extract unsafe archive member: {member.name}")
+        tar.extractall(destination)
+
+
+def _prepare_imagenet_val_subset() -> None:
+    """Prepare local ImageNet validation archives for torchvision.datasets.ImageNet."""
+    if not IMAGENET_VAL_ANNOTATIONS.exists():
+        if not IMAGENET_VAL_DEVKIT.exists():
+            raise FileNotFoundError(f"Missing ImageNet validation devkit: {IMAGENET_VAL_DEVKIT}")
+        with gzip.open(IMAGENET_VAL_DEVKIT, "rb") as source:
+            with IMAGENET_VAL_ANNOTATIONS.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+
+    val_root = IMAGENET_ROOT / "val"
+    has_val_classes = val_root.exists() and any(path.is_dir() for path in val_root.iterdir())
+    if not has_val_classes:
+        if not IMAGENET_VAL_ARCHIVE.exists():
+            raise FileNotFoundError(f"Missing ImageNet validation archive: {IMAGENET_VAL_ARCHIVE}")
+        IMAGENET_ROOT.mkdir(parents=True, exist_ok=True)
+        _safe_extract_tar(IMAGENET_VAL_ARCHIVE, IMAGENET_ROOT)
+        extracted_root = IMAGENET_ROOT / "val_blurred"
+        if extracted_root.exists() and val_root.exists() and not any(val_root.iterdir()):
+            val_root.rmdir()
+        if extracted_root.exists() and not val_root.exists():
+            extracted_root.rename(val_root)
+
+    if not IMAGENET_META_FILE.exists():
+        if not val_root.exists():
+            raise RuntimeError(f"Expected ImageNet validation folder at {val_root}")
+        wnids = sorted(path.name for path in val_root.iterdir() if path.is_dir())
+        if not wnids:
+            raise RuntimeError(f"No ImageNet class folders found in {val_root}")
+        wnid_to_classes = {wnid: (wnid,) for wnid in wnids}
+        torch.save((wnid_to_classes, []), IMAGENET_META_FILE)
+
+
 def _base_dataset_name(dataset: str) -> str:
     return dataset.removesuffix("_patches").removesuffix("_val_subset")
 
@@ -210,7 +260,8 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
     base_dataset = _base_dataset_name(dataset)
     if base_dataset == "imagenet":
         if dataset.removesuffix("_patches") == "imagenet_val_subset":
-            val_dataset = dataset_cls(str(DATA_DIR / "imagenet"), split="val", transform=transform)
+            _prepare_imagenet_val_subset()
+            val_dataset = dataset_cls(str(IMAGENET_ROOT), split="val", transform=transform)
             return deterministic_subset(
                 val_dataset,
                 size=IMAGENET_VAL_SUBSET_SIZE,
@@ -218,7 +269,7 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
                 seed=0,
             )
         split = "train" if train else "val"
-        return dataset_cls(str(DATA_DIR / "imagenet"), split=split, transform=transform)
+        return dataset_cls(str(IMAGENET_ROOT), split=split, transform=transform)
     cifar_dataset = dataset_cls(str(DATA_DIR), train=train, download=True, transform=transform)
     if base_dataset == "smallcifar10":
         return stratified_subset(
