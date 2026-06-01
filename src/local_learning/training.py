@@ -2,6 +2,7 @@ from typing import Any
 
 import torch
 import wandb
+from PIL import Image, ImageDraw
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -116,33 +117,53 @@ def wandb_log(run: Any, payload: dict[str, object]) -> None:
 
 
 def _draw_line(
-    image: torch.Tensor,
+    draw: ImageDraw.ImageDraw,
     start: tuple[int, int],
     end: tuple[int, int],
-    color: torch.Tensor,
+    color: tuple[int, int, int],
 ) -> None:
-    x0, y0 = start
-    x1, y1 = end
-    steps = max(abs(x1 - x0), abs(y1 - y0), 1)
-    for step in range(steps + 1):
-        t = step / steps
-        x = round(x0 + ((x1 - x0) * t))
-        y = round(y0 + ((y1 - y0) * t))
-        y_slice = slice(max(0, y - 1), min(image.shape[1], y + 2))
-        x_slice = slice(max(0, x - 1), min(image.shape[2], x + 2))
-        image[:, y_slice, x_slice] = color[:, None, None]
+    draw.line((start, end), fill=color, width=4)
 
 
-def _weight_mean_line_image(values: torch.Tensor, *, width: int = 720, height: int = 360) -> torch.Tensor:
-    image = torch.ones(3, height, width, dtype=torch.float32)
+def _draw_rotated_label(
+    image: Image.Image,
+    text: str,
+    position: tuple[int, int],
+    *,
+    fill: tuple[int, int, int],
+) -> None:
+    label = Image.new("RGBA", (260, 32), (255, 255, 255, 0))
+    label_draw = ImageDraw.Draw(label)
+    label_draw.text((0, 0), text, fill=fill)
+    rotated = label.rotate(60, expand=True)
+    image.paste(rotated, position, rotated)
+
+
+def _weight_mean_line_image(
+    values: torch.Tensor,
+    names: list[str],
+    *,
+    width: int = 1440,
+    height: int = 720,
+) -> torch.Tensor:
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
     if values.numel() == 0:
-        return image
+        return torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
 
-    padding = 44
-    axis_color = torch.tensor([0.70, 0.72, 0.74], dtype=torch.float32)
-    line_color = torch.tensor([0.08, 0.32, 0.72], dtype=torch.float32)
-    image[:, height - padding, padding : width - padding] = axis_color[:, None]
-    image[:, padding : height - padding, padding] = axis_color[:, None]
+    left = 120
+    right = 36
+    top = 36
+    bottom = 210
+    axis_color = (178, 184, 191)
+    grid_color = (226, 230, 235)
+    line_color = (20, 82, 184)
+    text_color = (35, 39, 47)
+    x_axis_y = height - bottom
+    plot_right = width - right
+    plot_top = top
+    draw.line((left, x_axis_y, plot_right, x_axis_y), fill=axis_color, width=2)
+    draw.line((left, plot_top, left, x_axis_y), fill=axis_color, width=2)
 
     y_min = float(values.amin())
     y_max = float(values.amax())
@@ -150,21 +171,32 @@ def _weight_mean_line_image(values: torch.Tensor, *, width: int = 720, height: i
         y_min -= 1.0
         y_max += 1.0
 
-    plot_w = max(1, width - (2 * padding) - 1)
-    plot_h = max(1, height - (2 * padding) - 1)
+    plot_w = max(1, plot_right - left)
+    plot_h = max(1, x_axis_y - plot_top)
     denom = max(1, values.numel() - 1)
+    tick_count = 5
+    for tick_idx in range(tick_count):
+        tick_fraction = tick_idx / (tick_count - 1)
+        tick_value = y_min + ((y_max - y_min) * tick_fraction)
+        y = x_axis_y - round(tick_fraction * plot_h)
+        draw.line((left - 8, y, left, y), fill=axis_color, width=2)
+        draw.line((left, y, plot_right, y), fill=grid_color, width=1)
+        draw.text((8, y - 8), f"{tick_value:.3g}", fill=text_color)
+
     points: list[tuple[int, int]] = []
     for idx, value in enumerate(values.tolist()):
-        x = padding + round((idx / denom) * plot_w)
-        y = height - padding - round(((value - y_min) / (y_max - y_min)) * plot_h)
+        x = left + round((idx / denom) * plot_w)
+        y = x_axis_y - round(((value - y_min) / (y_max - y_min)) * plot_h)
         points.append((x, y))
+        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=line_color)
+        draw.line((x, x_axis_y, x, x_axis_y + 7), fill=axis_color, width=2)
+        label = names[idx] if idx < len(names) else str(idx)
+        _draw_rotated_label(image, label, (x - 8, x_axis_y + 8), fill=text_color)
 
     for idx, point in enumerate(points):
-        if idx == 0:
-            image[:, point[1], point[0]] = line_color
-            continue
-        _draw_line(image, points[idx - 1], point, line_color)
-    return image
+        if idx > 0:
+            _draw_line(draw, points[idx - 1], point, line_color)
+    return torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
 
 
 def _weight_mean_payload(model: torch.nn.Module, *, model_type: str, phase: str) -> dict[str, object]:
@@ -179,7 +211,8 @@ def _weight_mean_payload(model: torch.nn.Module, *, model_type: str, phase: str)
         [float(module.tensor.detach().to(torch.float32).mean().cpu()) for module in weight_modules],
         dtype=torch.float32,
     )
-    image = _weight_mean_line_image(means)
+    names = [str(module.name) for module in weight_modules]
+    image = _weight_mean_line_image(means, names)
     caption = " | ".join(
         f"{module.name}: {value:.4g}"
         for module, value in zip(weight_modules, means.tolist(), strict=True)
