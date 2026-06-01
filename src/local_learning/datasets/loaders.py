@@ -24,7 +24,7 @@ IMAGENET_VAL_SUBSET_TRAIN_FRACTION = 0.8
 IMAGENET_ROOT = DATA_DIR / "imagenet"
 IMAGENET_META_FILE = IMAGENET_ROOT / "meta.bin"
 IMAGENET_VAL_ARCHIVE = DATA_DIR / "val_blurred.tar.gz"
-IMAGENET_VAL_DEVKIT = DATA_DIR / "val_devkit.gz"
+IMAGENET_VAL_DEVKIT = DATA_DIR / "val_devkit.json.gz"
 IMAGENET_VAL_ANNOTATIONS = DATA_DIR / "face_annotations_ILSVRC.json"
 
 
@@ -168,7 +168,9 @@ def _prepare_imagenet_val_subset() -> None:
     """Prepare local ImageNet validation archives for torchvision.datasets.ImageNet."""
     if not IMAGENET_VAL_ANNOTATIONS.exists():
         if not IMAGENET_VAL_DEVKIT.exists():
-            raise FileNotFoundError(f"Missing ImageNet validation devkit: {IMAGENET_VAL_DEVKIT}")
+            raise FileNotFoundError(
+                f"Missing ImageNet validation devkit: {IMAGENET_VAL_DEVKIT}"
+            )
         with gzip.open(IMAGENET_VAL_DEVKIT, "rb") as source:
             with IMAGENET_VAL_ANNOTATIONS.open("wb") as destination:
                 shutil.copyfileobj(source, destination)
