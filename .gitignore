@@ -2,3 +2,4 @@
 *.log
 .agents
 .codex
+__pycache__/
