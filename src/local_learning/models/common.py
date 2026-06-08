@@ -254,6 +254,8 @@ def get_model(cfg: dict[str, Any]) -> nn.Module:
                 dataset=str(cfg["dataset"]),
                 pretrained=use_default_weights,
                 freeze_backbone=False,
+                deconv_training=bool(cfg.get("vgg_deconv_training", False)),
+                local_training=bool(cfg.get("vgg_local_training", False)),
             )
         case "wta_conv_ae":
             return WTA_CONV_AE(

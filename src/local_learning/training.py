@@ -61,6 +61,10 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg["weights"] = str(cfg.get("weights", "random"))
     if cfg["weights"] not in {"default", "pretrained", "random"}:
         raise ValueError("weights must be 'default', 'pretrained', or 'random'.")
+    cfg["vgg_local_training"] = bool(cfg.get("vgg_local_training", False))
+    cfg["vgg_deconv_training"] = bool(
+        cfg.get("vgg_deconv_training", cfg["vgg_local_training"])
+    )
     cfg["training_mode"] = _training_mode_for_architecture(str(cfg["architecture_type"]))
     return cfg
 
@@ -99,6 +103,8 @@ def get_config_name(cfg: dict[str, Any]) -> str:
     architecture_mode = ""
     if cfg["architecture_type"] == "greedy_stacked_autoencoder":
         architecture_mode = f"-gsa_local_{bool(cfg.get('gsa_local_training', False))}"
+    elif cfg["architecture_type"] == "vgg16":
+        architecture_mode = f"-vgg_local_{bool(cfg.get('vgg_local_training', False))}"
 
     return (
         f"{cfg['training_mode']}"

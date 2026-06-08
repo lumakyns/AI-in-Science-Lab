@@ -327,8 +327,14 @@ def get_loss(cfg: dict[str, Any]) -> nn.Module:
     loss_type = cfg["loss_type"]
     architecture_type = cfg["architecture_type"]
     local_reconstruction_training = (
-        architecture_type == "greedy_stacked_autoencoder"
-        and bool(cfg.get("gsa_local_training", False))
+        (
+            architecture_type == "greedy_stacked_autoencoder"
+            and bool(cfg.get("gsa_local_training", False))
+        )
+        or (
+            architecture_type == "vgg16"
+            and bool(cfg.get("vgg_local_training", False))
+        )
     )
     reconstruction_strength = (
         cfg.get("gsa_local_reconstruction_strength")
