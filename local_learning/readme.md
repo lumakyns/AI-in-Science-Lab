@@ -11,7 +11,6 @@ visualization stack is archived in `old_readme.md`.
   `resnet18`, or `densenet121`.
 - `weights`: selects initialization. Use `random` for random initialization or
   `default`/`pretrained` for the torchvision default ImageNet weights.
-  Pretrained weights are cached under `src/local_learning/model_weights/`.
   `default`/`pretrained` is currently supported for `vgg16`, `resnet18`, and
   `densenet121`.
 - `imagenet_val_subset`: dataset option that uses only the ImageNet validation

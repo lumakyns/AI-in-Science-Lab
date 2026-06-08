@@ -1,14 +1,11 @@
 import logging
-from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import urlparse
 
 import torch
 import torch.nn as nn
 
 
 LOGGER = logging.getLogger(__name__)
-PRETRAINED_WEIGHTS_DIR = Path(__file__).resolve().parents[1] / "model_weights"
 
 
 class FeatureMapEntry(NamedTuple):
@@ -130,31 +127,9 @@ class LayerCaptureMixin:
 
 
 def load_torchvision_state_dict(model_name: str, weights: Any) -> dict[str, torch.Tensor]:
-    """Load torchvision weights through the project-local pretrained weights cache."""
-    PRETRAINED_WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-    cached_path = _torchvision_cached_weight_path(weights)
-    if cached_path is not None and cached_path.exists():
-        LOGGER.info("[%s] Loading pretrained weights from %s", model_name, cached_path)
-    else:
-        LOGGER.info("[%s] Downloading pretrained weights to %s", model_name, PRETRAINED_WEIGHTS_DIR)
-
-    state_dict = weights.get_state_dict(
-        progress=True,
-        check_hash=True,
-        model_dir=str(PRETRAINED_WEIGHTS_DIR),
-    )
-
-    loaded_path = cached_path if cached_path is not None else PRETRAINED_WEIGHTS_DIR
-    LOGGER.info("[%s] Loaded pretrained weights from %s", model_name, loaded_path)
-    return state_dict
-
-
-def _torchvision_cached_weight_path(weights: Any) -> Path | None:
-    url = getattr(weights, "url", "")
-    filename = Path(urlparse(url).path).name
-    if not filename:
-        return None
-    return PRETRAINED_WEIGHTS_DIR / filename
+    """Load torchvision weights with torchvision's default cache behavior."""
+    LOGGER.info("[%s] Loading pretrained weights through torchvision", model_name)
+    return weights.get_state_dict(progress=True, check_hash=True)
 
 
 def get_num_classes(dataset: str) -> int:

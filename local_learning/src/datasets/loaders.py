@@ -9,11 +9,11 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+LOCAL_LEARNING_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = LOCAL_LEARNING_ROOT.parent
 DATA_DIR_CANDIDATES = (
+    LOCAL_LEARNING_ROOT / "data",
     REPO_ROOT / "data",
-    PACKAGE_ROOT / "data",
 )
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)

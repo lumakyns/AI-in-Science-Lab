@@ -3,5 +3,3 @@
 .agents
 .codex
 __pycache__/
-src/local_learning/model_weights/*
-!src/local_learning/model_weights/.gitkeep

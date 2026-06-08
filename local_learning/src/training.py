@@ -358,7 +358,13 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
 
     num_epochs = int(cfg["epochs"])
     total_train_examples = len(train_loader.dataset)
-    for epoch in range(num_epochs):
+    epoch_progress = tqdm(
+        range(num_epochs),
+        desc="Epochs",
+        unit="epoch",
+        position=0,
+    )
+    for epoch in epoch_progress:
         if hasattr(model, "clear_stats"):
             model.clear_stats()
         if frozen:
@@ -367,12 +373,15 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
             model.train()
         inputs_processed_in_epoch = 0
 
-        progress = tqdm(
-            total=total_train_examples,
+        batch_progress = tqdm(
+            train_loader,
+            total=len(train_loader),
             desc=f"Epoch {epoch + 1}/{num_epochs}",
-            unit="example",
+            unit="batch",
+            position=1,
+            leave=False,
         )
-        for step_in_epoch, (xb, yb) in enumerate(train_loader):
+        for step_in_epoch, (xb, yb) in enumerate(batch_progress):
             batch_size = int(xb.shape[0])
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
@@ -412,8 +421,7 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                 wandb_log(run, log_payload)
 
             inputs_processed_in_epoch += batch_size
-            progress.update(batch_size)
-            progress.set_postfix(
+            batch_progress.set_postfix(
                 examples=f"{inputs_processed_in_epoch}/{total_train_examples}",
                 device=device.type,
             )
@@ -426,7 +434,8 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
                     model.eval()
                 else:
                     model.train()
-        progress.close()
+        batch_progress.close()
+        epoch_progress.set_postfix(device=device.type)
         wandb_log(
             run,
             _weight_mean_payload(

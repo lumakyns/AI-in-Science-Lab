@@ -27,6 +27,7 @@ jobs:
         run: |
           rclone sync ./ "gdrive-personal:Research/AI-In-Science-Lab" \
             --exclude "data/**" \
+            --exclude "local_learning/data/**" \
             --exclude ".mypy_cache/**" \
             --exclude ".git/**" \
             --progress
