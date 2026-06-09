@@ -295,25 +295,44 @@ def train(config: dict[str, Any], *, device: torch.device | None = None) -> dict
     run.name = get_config_name(cfg)
     configure_wandb_metrics(run)
 
-    # Build data first so dataset_size is available to sparse models.
-    train_loader, test_loader = get_loaders(cfg, device)
-    cfg["dataset_size"] = len(train_loader.dataset)
+    setup_progress = tqdm(total=5, desc="Setup", unit="step", position=0)
+    try:
+        # Build data first so dataset_size is available to sparse models.
+        tqdm.write(f"[setup] loading dataset {cfg['data']}")
+        train_loader, test_loader = get_loaders(cfg, device)
+        cfg["dataset_size"] = len(train_loader.dataset)
+        setup_progress.update()
 
-    # Model, loss, and optimizer all come from the normalized config.
-    model = get_model(cfg).to(device)
-    frozen = bool(cfg.get("frozen", False))
-    if frozen:
-        for param in model.parameters():
-            param.requires_grad = False
+        # Model, loss, and optimizer all come from the normalized config.
+        tqdm.write(
+            f"[setup] loading model {cfg['architecture_type']} "
+            f"with weights={cfg['weights']}"
+        )
+        model = get_model(cfg).to(device)
+        frozen = bool(cfg.get("frozen", False))
+        if frozen:
+            for param in model.parameters():
+                param.requires_grad = False
+        setup_progress.update()
 
-    criterion = get_loss(cfg).to(device)
-    trainable_params = [param for param in model.parameters() if param.requires_grad]
-    optimizer = (
-        torch.optim.Adam(trainable_params, lr=float(cfg["learning_rate"]))
-        if trainable_params
-        else None
-    )
-    wandb_log(run, _weight_mean_payload(model, model_type=str(cfg["architecture_type"]), phase="initial"))
+        tqdm.write(f"[setup] loading loss {cfg['loss_type']}")
+        criterion = get_loss(cfg).to(device)
+        setup_progress.update()
+
+        tqdm.write("[setup] creating optimizer")
+        trainable_params = [param for param in model.parameters() if param.requires_grad]
+        optimizer = (
+            torch.optim.Adam(trainable_params, lr=float(cfg["learning_rate"]))
+            if trainable_params
+            else None
+        )
+        setup_progress.update()
+
+        tqdm.write("[setup] logging initial weights")
+        wandb_log(run, _weight_mean_payload(model, model_type=str(cfg["architecture_type"]), phase="initial"))
+        setup_progress.update()
+    finally:
+        setup_progress.close()
 
     def eval_model(epoch: int) -> dict[str, float]:
         # Run a bounded validation pass to keep logging cost predictable.

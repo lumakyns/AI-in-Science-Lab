@@ -3,6 +3,7 @@ from typing import Any, NamedTuple
 
 import torch
 import torch.nn as nn
+from tqdm.auto import tqdm
 
 
 LOGGER = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ class LayerCaptureMixin:
 def load_torchvision_state_dict(model_name: str, weights: Any) -> dict[str, torch.Tensor]:
     """Load torchvision weights with torchvision's default cache behavior."""
     LOGGER.info("[%s] Loading pretrained weights through torchvision", model_name)
+    tqdm.write(f"[weights] loading torchvision {model_name} weights")
     return weights.get_state_dict(progress=True, check_hash=True)
 
 

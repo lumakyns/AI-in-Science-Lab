@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
+from tqdm.auto import tqdm
 
 
 LOCAL_LEARNING_ROOT = Path(__file__).resolve().parents[2]
@@ -180,16 +181,24 @@ def deterministic_subset(dataset: Dataset, *, size: int, train: bool, seed: int 
 def _safe_extract_tar(archive: Path, destination: Path) -> None:
     destination = destination.resolve()
     with tarfile.open(archive, "r:*") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        for member in members:
             target = (destination / member.name).resolve()
             if destination != target and destination not in target.parents:
                 raise RuntimeError(f"Refusing to extract unsafe archive member: {member.name}")
-        tar.extractall(destination)
+        for member in tqdm(
+            members,
+            desc=f"Extracting {archive.name}",
+            unit="file",
+            leave=False,
+        ):
+            tar.extract(member, destination)
 
 
 def _prepare_imagenet_val_subset() -> None:
     """Prepare local ImageNet validation archives for torchvision.datasets.ImageNet."""
     data_dir = _data_dir()
+    tqdm.write(f"[imagenet] data directory: {data_dir}")
     imagenet_root = data_dir / "imagenet"
     imagenet_meta_file = imagenet_root / "meta.bin"
     imagenet_val_archive = data_dir / "val_blurred.tar.gz"
@@ -199,15 +208,19 @@ def _prepare_imagenet_val_subset() -> None:
     if not imagenet_val_annotations.exists():
         if not imagenet_val_devkit.exists():
             raise _missing_file_error("ImageNet validation devkit", imagenet_val_devkit)
+        tqdm.write(f"[imagenet] expanding validation annotations: {imagenet_val_devkit.name}")
         with gzip.open(imagenet_val_devkit, "rb") as source:
             with imagenet_val_annotations.open("wb") as destination:
                 shutil.copyfileobj(source, destination)
+    else:
+        tqdm.write(f"[imagenet] validation annotations ready: {imagenet_val_annotations}")
 
     val_root = imagenet_root / "val"
     has_val_classes = val_root.exists() and any(path.is_dir() for path in val_root.iterdir())
     if not has_val_classes:
         if not imagenet_val_archive.exists():
             raise _missing_file_error("ImageNet validation archive", imagenet_val_archive)
+        tqdm.write(f"[imagenet] extracting validation archive: {imagenet_val_archive.name}")
         imagenet_root.mkdir(parents=True, exist_ok=True)
         _safe_extract_tar(imagenet_val_archive, imagenet_root)
         extracted_root = imagenet_root / "val_blurred"
@@ -215,6 +228,8 @@ def _prepare_imagenet_val_subset() -> None:
             val_root.rmdir()
         if extracted_root.exists() and not val_root.exists():
             extracted_root.rename(val_root)
+    else:
+        tqdm.write(f"[imagenet] validation images ready: {val_root}")
 
     if not imagenet_meta_file.exists():
         if not val_root.exists():
@@ -222,8 +237,11 @@ def _prepare_imagenet_val_subset() -> None:
         wnids = sorted(path.name for path in val_root.iterdir() if path.is_dir())
         if not wnids:
             raise RuntimeError(f"No ImageNet class folders found in {val_root}")
+        tqdm.write(f"[imagenet] writing torchvision metadata: {imagenet_meta_file}")
         wnid_to_classes = {wnid: (wnid,) for wnid in wnids}
         torch.save((wnid_to_classes, []), imagenet_meta_file)
+    else:
+        tqdm.write(f"[imagenet] torchvision metadata ready: {imagenet_meta_file}")
 
 
 def _base_dataset_name(dataset: str) -> str:
