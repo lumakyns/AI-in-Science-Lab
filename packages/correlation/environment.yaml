@@ -1,0 +1,15 @@
+name: correlation
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python
+  - pytorch
+  - torchvision
+  - pytorch-cuda
+  - matplotlib
+  - pyarrow
+  - tqdm
+  - wandb
+  - pyyaml

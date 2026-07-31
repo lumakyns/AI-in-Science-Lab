@@ -3,3 +3,5 @@
 .agents
 .codex
 __pycache__/
+packages/correlation/data/
+packages/correlation/outputs/
