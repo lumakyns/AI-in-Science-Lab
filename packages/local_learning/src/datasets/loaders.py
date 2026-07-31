@@ -1,5 +1,3 @@
-import gzip
-import shutil
 import tarfile
 from pathlib import Path
 
@@ -40,9 +38,18 @@ def _format_dir_contents(path: Path) -> str:
     return f"{path} contains: {', '.join(contents[:30])}"
 
 
+def _has_class_dirs(path: Path) -> bool:
+    return path.exists() and any(child.is_dir() for child in path.iterdir())
+
+
 def _data_dir() -> Path:
     for path in DATA_DIR_CANDIDATES:
-        if (path / "val_blurred.tar.gz").exists() or (path / "val_devkit.json.gz").exists():
+        if (
+            _has_class_dirs(path / "val_blurred")
+            or _has_class_dirs(path / "imagenet" / "val")
+            or (path / "val_blurred.tar.gz").exists()
+            or (path / "val_devkit.json.gz").exists()
+        ):
             return path
     return DATA_DIR_CANDIDATES[0]
 
@@ -195,53 +202,32 @@ def _safe_extract_tar(archive: Path, destination: Path) -> None:
             tar.extract(member, destination)
 
 
-def _prepare_imagenet_val_subset() -> None:
-    """Prepare local ImageNet validation archives for torchvision.datasets.ImageNet."""
+def _prepare_imagenet_val_subset() -> Path:
+    """Prepare the local ImageNet validation subset folder next to its archive."""
     data_dir = _data_dir()
     tqdm.write(f"[imagenet] data directory: {data_dir}")
-    imagenet_root = data_dir / "imagenet"
-    imagenet_meta_file = imagenet_root / "meta.bin"
     imagenet_val_archive = data_dir / "val_blurred.tar.gz"
-    imagenet_val_devkit = data_dir / "val_devkit.json.gz"
-    imagenet_val_annotations = data_dir / "face_annotations_ILSVRC.json"
+    val_root = data_dir / "val_blurred"
+    legacy_val_root = data_dir / "imagenet" / "val"
 
-    if not imagenet_val_annotations.exists():
-        if not imagenet_val_devkit.exists():
-            raise _missing_file_error("ImageNet validation devkit", imagenet_val_devkit)
-        tqdm.write(f"[imagenet] expanding validation annotations: {imagenet_val_devkit.name}")
-        with gzip.open(imagenet_val_devkit, "rb") as source:
-            with imagenet_val_annotations.open("wb") as destination:
-                shutil.copyfileobj(source, destination)
-    else:
-        tqdm.write(f"[imagenet] validation annotations ready: {imagenet_val_annotations}")
+    if _has_class_dirs(val_root):
+        tqdm.write(f"[imagenet] validation images ready: {val_root}")
+        return val_root
 
-    val_root = imagenet_root / "val"
-    has_val_classes = val_root.exists() and any(path.is_dir() for path in val_root.iterdir())
-    if not has_val_classes:
+    if _has_class_dirs(legacy_val_root):
+        tqdm.write(f"[imagenet] validation images ready: {legacy_val_root}")
+        return legacy_val_root
+
+    if not _has_class_dirs(val_root):
         if not imagenet_val_archive.exists():
             raise _missing_file_error("ImageNet validation archive", imagenet_val_archive)
         tqdm.write(f"[imagenet] extracting validation archive: {imagenet_val_archive.name}")
-        imagenet_root.mkdir(parents=True, exist_ok=True)
-        _safe_extract_tar(imagenet_val_archive, imagenet_root)
-        extracted_root = imagenet_root / "val_blurred"
-        if extracted_root.exists() and val_root.exists() and not any(val_root.iterdir()):
-            val_root.rmdir()
-        if extracted_root.exists() and not val_root.exists():
-            extracted_root.rename(val_root)
-    else:
-        tqdm.write(f"[imagenet] validation images ready: {val_root}")
+        _safe_extract_tar(imagenet_val_archive, data_dir)
 
-    if not imagenet_meta_file.exists():
-        if not val_root.exists():
-            raise RuntimeError(f"Expected ImageNet validation folder at {val_root}")
-        wnids = sorted(path.name for path in val_root.iterdir() if path.is_dir())
-        if not wnids:
-            raise RuntimeError(f"No ImageNet class folders found in {val_root}")
-        tqdm.write(f"[imagenet] writing torchvision metadata: {imagenet_meta_file}")
-        wnid_to_classes = {wnid: (wnid,) for wnid in wnids}
-        torch.save((wnid_to_classes, []), imagenet_meta_file)
-    else:
-        tqdm.write(f"[imagenet] torchvision metadata ready: {imagenet_meta_file}")
+    if not _has_class_dirs(val_root):
+        raise RuntimeError(f"Expected ImageNet validation folder with class subfolders at {val_root}")
+    tqdm.write(f"[imagenet] validation images ready: {val_root}")
+    return val_root
 
 
 def _base_dataset_name(dataset: str) -> str:
@@ -309,8 +295,8 @@ def _make_base_dataset(dataset: str, train: bool, transform) -> Dataset:
     if base_dataset == "imagenet":
         imagenet_root = _data_dir() / "imagenet"
         if dataset.removesuffix("_patches") == "imagenet_val_subset":
-            _prepare_imagenet_val_subset()
-            val_dataset = dataset_cls(str(imagenet_root), split="val", transform=transform)
+            val_root = _prepare_imagenet_val_subset()
+            val_dataset = datasets.ImageFolder(str(val_root), transform=transform)
             return deterministic_subset(
                 val_dataset,
                 size=IMAGENET_VAL_SUBSET_SIZE,
