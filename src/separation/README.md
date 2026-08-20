@@ -9,18 +9,20 @@ spatial patches are sampled. A patch has the height and width of the selected
 layer's convolution kernel, so applying the filters to one patch produces a
 vector of filter responses.
 
-The two representations in each pair are encouraged to point in different
-directions, so their cosine similarity should be small.
+For each pair, cosine similarity is measured both before and after the selected
+convolution. The convolution is encouraged to reduce similarity relative to
+its input.
 
 The separation loss is:
 
 ```text
-cosine_similarity(response_a, response_b)^2
+mean(cosine_after - cosine_before)
 ```
 
-Squaring the cosine similarity asks the representations to be different without
-requiring one to be the negative of the other. The loss is averaged over random
-patch pairs and over the selected layers.
+The loss is averaged over random patch pairs and over the selected layers. W&B
+logs the average before cosine, after cosine, and their expected difference for
+all four convolutional transformations on every pretraining and regular
+training batch.
 
 The config controls how much pretraining to use:
 

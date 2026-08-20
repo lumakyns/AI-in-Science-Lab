@@ -14,7 +14,8 @@ fail() {
 }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "this setup script supports Linux only"
-[[ -f "src/separation/config.yaml" && -f "data/download.py" ]] || \
+[[ -f "src/separation/config.yaml" && -f "src/separation/sweep.yaml" && \
+  -f "data/download.py" ]] || \
   fail "run this script from the AI-in-Science-Lab repository root"
 command -v nvidia-smi >/dev/null 2>&1 || \
   fail "nvidia-smi was not found; install the NVIDIA driver before running setup"
@@ -129,3 +130,6 @@ echo "Setup complete. Open a new shell or run:"
 echo "  conda activate ${ENVIRONMENT_NAME}"
 echo "Then start training with:"
 echo "  python -m src.separation.training --config src/separation/config.yaml"
+echo "Or create a W&B sweep with:"
+echo "  wandb sweep --project separation src/separation/sweep.yaml"
+echo "  wandb agent <entity>/separation/<sweep-id>"

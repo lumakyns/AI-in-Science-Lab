@@ -15,6 +15,8 @@ class Dataset(str, Enum):
 
     CIFAR10 = "cifar10"
     MNIST = "mnist"
+    FASHION_MNIST = "fashion_mnist"
+    LOWRANK = "lowrank"
 
 
 class Split(str, Enum):

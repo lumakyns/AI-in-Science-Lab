@@ -15,6 +15,8 @@ checkpoints/
 src/
   <experiment>/
     README.md
+    notes/
+      experiments.txt
     __init__.py
     config.yaml
     datasets.py
@@ -23,6 +25,11 @@ src/
       __init__.py
       <model>.py
 ```
+
+- Do not create a `latex/` directory for experiment notes. Keep a very short,
+  technical description of the current experimental design in
+  `src/<experiment>/notes/experiments.txt`; it must be no more than two short
+  paragraphs and should be updated whenever the experiment design changes.
 
 - Put reusable model definitions only in `src/<experiment>/models/`. Do not put
   models in notebooks or directly in the experiment directory.

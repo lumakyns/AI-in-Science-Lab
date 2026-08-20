@@ -21,12 +21,12 @@ SPLIT_NAMES = ("train", "validation", "test")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Download CIFAR-10 and MNIST when prepared splits are missing."
+        description="Download image datasets and prepare synthetic Lowrank when prepared splits are missing."
     )
     parser.add_argument(
         "datasets",
         nargs="*",
-        choices=("cifar10", "mnist"),
+        choices=("cifar10", "mnist", "fashion_mnist", "lowrank"),
         default=("cifar10", "mnist"),
         help="Datasets to prepare (default: both).",
     )
@@ -175,12 +175,37 @@ def load_mnist(dataset_dir: Path, datasets: Any) -> tuple[Any, Any, Any, Any]:
     )
 
 
+def load_fashion_mnist(dataset_dir: Path, datasets: Any) -> tuple[Any, Any, Any, Any]:
+    train = datasets.FashionMNIST(root=dataset_dir, train=True, download=True)
+    test = datasets.FashionMNIST(root=dataset_dir, train=False, download=True)
+    return train.data.unsqueeze(1), train.targets, test.data.unsqueeze(1), test.targets
+
+
+def prepare_lowrank(validation_fraction: float, seed: int, force: bool, torch: Any) -> None:
+    directory = DATA_DIR / "lowrank"
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = split_paths(directory)
+    if not force and all(p.is_file() for p in paths.values()):
+        return
+    generator = torch.Generator().manual_seed(seed)
+    basis = torch.randn(20, 100, generator=generator)
+    validation_count = round(60000 * validation_fraction)
+    for split, count in (("train", 60000 - validation_count),
+                         ("validation", validation_count), ("test", 10000)):
+        images = (torch.randn(count, 20, generator=generator) @ basis).view(count, 1, 1, 100)
+        # Preserve real values; image save_split deliberately converts to uint8.
+        torch.save({"images": images, "labels": torch.zeros(count, dtype=torch.int64)}, paths[split])
+
+
 def main() -> None:
     args = parse_args()
     torch, torchvision_datasets = require_dependencies()
-    loaders = {"cifar10": load_cifar10, "mnist": load_mnist}
+    loaders = {"cifar10": load_cifar10, "mnist": load_mnist, "fashion_mnist": load_fashion_mnist}
 
     for name in args.datasets:
+        if name == "lowrank":
+            prepare_lowrank(args.validation_fraction, args.seed, args.force, torch)
+            continue
         prepare_dataset(
             name=name,
             load=loaders[name],

@@ -1,0 +1,42 @@
+dataset: mnist
+data_root: data
+seed: 0
+device: cpu
+model:
+  tied_weights: false
+learning:
+  algorithm: bp
+logging:
+  every_steps: 100
+  diagnostics_every_steps: 100
+optimizer:
+  type: sgd
+  learning_rate: 0.0005
+  momentum: 0.0
+  weight_decay: 0.0
+scheduler:
+  type: none
+  step_size: 50
+  gamma: 0.1
+training:
+  cpu_threads: 1
+  epochs: 8
+  max_batches: null
+dataloader:
+  batch_size: 1
+  eval_batch_size: 512
+  num_workers: 0
+  pin_memory: false
+checkpoint:
+  enabled: false
+  dir: checkpoints/recirculation
+  every_epochs: 4
+wandb:
+  mode: online
+  entity: null
+  group: null
+  tags: []
+
+plots:
+  enabled: true
+  examples: 6

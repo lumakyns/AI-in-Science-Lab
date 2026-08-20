@@ -1,0 +1,19 @@
+program: src/recirculation_supervised/training.py
+command:
+  - ${env}
+  - ${interpreter}
+  - -m
+  - src.recirculation_supervised.training
+  - --config
+  - src/recirculation_supervised/config.yaml
+method: grid
+metric:
+  name: validation/loss
+  goal: minimize
+parameters:
+  learning.method:
+    values: [bp, random, calibrated, scrambled]
+  optimizer.learning_rate:
+    values: [0.001, 0.0001]
+  seed:
+    values: [0, 1, 2]

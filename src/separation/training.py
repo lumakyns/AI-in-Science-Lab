@@ -93,7 +93,9 @@ def init_wandb(config: dict[str, Any], timestamp: str) -> Any | None:
     wandb.define_metric("separation_step")
     wandb.define_metric("regular_step")
     wandb.define_metric("separation loss", step_metric="separation_step")
+    wandb.define_metric("separation/*", step_metric="separation_step")
     wandb.define_metric("regular loss", step_metric="regular_step")
+    wandb.define_metric("regular/separation/*", step_metric="regular_step")
     wandb.define_metric("train/loss", step_metric="regular_step")
     wandb.define_metric("train/accuracy", step_metric="regular_step")
     wandb.define_metric("train/precision", step_metric="regular_step")
@@ -171,17 +173,15 @@ def separation_loss(
     images: torch.Tensor,
     layers: list[int],
     pairs_per_layer: int,
-) -> tuple[torch.Tensor, float]:
+) -> tuple[torch.Tensor, list[dict[str, torch.Tensor]]]:
     if not layers:
         raise ValueError("separation_loss requires at least one selected layer")
 
     inputs = model.conv_inputs(images, detach_layer_inputs=True)
     convolutions = (model.conv1, model.conv2, model.conv3, model.conv4)
-    layer_cosines = []
+    layer_statistics: list[dict[str, torch.Tensor]] = []
 
-    for layer_idx in layers:
-        layer_input = inputs[layer_idx]
-        convolution = convolutions[layer_idx]
+    for layer_idx, (layer_input, convolution) in enumerate(zip(inputs, convolutions)):
         kernel_size = convolution.kernel_size[0]
         height, width = layer_input.shape[-2:]
         if height < kernel_size or width < kernel_size:
@@ -202,27 +202,63 @@ def separation_loss(
             dim=2,
             index=locations.unsqueeze(1).expand(-1, patch_width, -1),
         ).transpose(1, 2)
+        sampled_pairs = sampled.reshape(batch_size, pairs_per_layer, 2, patch_width)
+
+        cosine_before = F.cosine_similarity(
+            sampled_pairs[:, :, 0],
+            sampled_pairs[:, :, 1],
+            dim=-1,
+            eps=1e-8,
+        )
 
         # [B, 2P, patch_width] @ [filters, patch_width].T -> [B, 2P, filters].
         # Computing every image and pair together avoids thousands of small GPU
         # kernel launches and device-to-CPU synchronizations per training batch.
-        representations = F.linear(
+        representation_pairs = F.linear(
             sampled,
             convolution.weight.flatten(1),
             convolution.bias,
         ).reshape(batch_size, pairs_per_layer, 2, -1)
-        cosines = F.cosine_similarity(
-            representations[:, :, 0],
-            representations[:, :, 1],
+        cosine_after = F.cosine_similarity(
+            representation_pairs[:, :, 0],
+            representation_pairs[:, :, 1],
             dim=-1,
             eps=1e-8,
         )
-        layer_cosines.append(cosines)
+        layer_statistics.append(
+            {
+                "cosine_before": cosine_before.mean(),
+                "cosine_after": cosine_after.mean(),
+                "expected_difference": (cosine_after - cosine_before).mean(),
+            }
+        )
 
-    all_cosines = torch.stack(layer_cosines)
-    loss = all_cosines.square().mean()
-    cosine_abs = float(all_cosines.detach().abs().mean().cpu())
-    return loss, cosine_abs
+    loss = torch.stack(
+        [layer_statistics[layer]["expected_difference"] for layer in layers]
+    ).mean()
+    return loss, layer_statistics
+
+
+def cosine_log_values(
+    layer_statistics: list[dict[str, torch.Tensor]],
+    *,
+    prefix: str,
+) -> dict[str, float]:
+    """Convert per-transformation cosine diagnostics to W&B scalars."""
+
+    values: dict[str, float] = {}
+    transformations = (
+        "input_to_layer1",
+        "layer1_to_layer2",
+        "layer2_to_layer3",
+        "layer3_to_layer4",
+    )
+    for transformation, statistics in zip(transformations, layer_statistics):
+        for name, value in statistics.items():
+            values[f"{prefix}/{transformation}/{name}"] = float(
+                value.detach().cpu()
+            )
+    return values
 
 
 def run_separation_pretraining(
@@ -254,7 +290,7 @@ def run_separation_pretraining(
                 break
             images = images.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            loss, cosine_abs = separation_loss(
+            loss, layer_statistics = separation_loss(
                 model=model,
                 images=images,
                 layers=layers,
@@ -268,10 +304,13 @@ def run_separation_pretraining(
                 run.log(
                     {
                         "separation loss": float(loss.detach().cpu()),
-                        "separation/cosine_abs": cosine_abs,
                         "separation/epoch": epoch,
                         "separation_step": global_step,
                         "learning_rate/separation": optimizer.param_groups[0]["lr"],
+                        **cosine_log_values(
+                            layer_statistics,
+                            prefix="separation",
+                        ),
                     }
                 )
 
@@ -367,6 +406,15 @@ def run_regular_training(
         for images, labels in train_loader:
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            layer_statistics = None
+            if run is not None:
+                with torch.no_grad():
+                    _, layer_statistics = separation_loss(
+                        model=model,
+                        images=images,
+                        layers=[0, 1, 2, 3],
+                        pairs_per_layer=config["separation"]["pairs_per_layer"],
+                    )
             optimizer.zero_grad(set_to_none=True)
             logits = model(images)
             loss = criterion(logits, labels)
@@ -390,6 +438,10 @@ def run_regular_training(
                         "epoch": epoch,
                         "regular_step": global_step,
                         "learning_rate/regular": optimizer.param_groups[0]["lr"],
+                        **cosine_log_values(
+                            layer_statistics,
+                            prefix="regular/separation",
+                        ),
                     }
                 )
 
