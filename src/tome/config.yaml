@@ -1,0 +1,46 @@
+dataset: cifar100
+data_root: data
+seed: 0
+device: cuda
+augmentation: true
+model:
+  patch_size: 4
+  dim: 192
+  depth: 9
+  heads: 3
+  mlp_ratio: 4.0
+  dropout: 0.0
+  drop_path: 0.1
+  reduction: 4
+  proportional_attention: true
+optimizer:
+  learning_rate: 0.0005
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+scheduler:
+  warmup_epochs: 5
+  min_lr_ratio: 0.01
+training:
+  epochs: 100
+  gradient_clip_norm: 1.0
+  label_smoothing: 0.1
+  amp: true
+  cpu_threads: 4
+  log_every_batches: 50
+  max_batches: null
+dataloader:
+  batch_size: 128
+  eval_batch_size: 256
+  num_workers: 4
+  pin_memory: true
+visualization:
+  samples: 4
+checkpoint:
+  dir: checkpoints/tome
+  save_last: true
+  save_best: true
+wandb:
+  project: tome
+  mode: online
+  entity: null
+  tags: [tome, vit, cifar100, from-scratch]

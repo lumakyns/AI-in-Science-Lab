@@ -1,0 +1,24 @@
+project: surround_attention
+name: nat-vil-surround-cifar100-30epochs
+program: src/surround_attention/training.py
+method: grid
+metric:
+  name: validation/accuracy
+  goal: maximize
+parameters:
+  model.family:
+    values: [nat, vil]
+  model.modulation.variant:
+    values: [baseline, dog_fixed, random_fixed, dog_trainable, random_trainable]
+  seed:
+    value: 0
+  training.epochs:
+    value: 30
+command:
+  - ${env}
+  - ${interpreter}
+  - -m
+  - src.surround_attention.training
+  - --config
+  - src/surround_attention/config.yaml
+  - ${args_no_hyphens}

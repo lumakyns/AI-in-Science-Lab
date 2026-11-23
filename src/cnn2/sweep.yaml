@@ -1,0 +1,22 @@
+project: cnn2
+name: cifar10-cifar100-10-epochs
+program: src/cnn2/training.py
+method: grid
+metric:
+  name: test/accuracy
+  goal: maximize
+parameters:
+  dataset:
+    values: [cifar10, cifar100]
+  seed:
+    value: 0
+  training.epochs:
+    value: 10
+command:
+  - ${env}
+  - ${interpreter}
+  - -m
+  - src.cnn2.training
+  - --config
+  - src/cnn2/config.yaml
+  - ${args_no_hyphens}

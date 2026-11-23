@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "datasets",
         nargs="*",
-        choices=("cifar10", "mnist", "fashion_mnist", "lowrank"),
+        choices=("cifar10", "cifar100", "mnist", "fashion_mnist", "lowrank"),
         default=("cifar10", "mnist"),
         help="Datasets to prepare (default: both).",
     )
@@ -164,6 +164,17 @@ def load_cifar10(dataset_dir: Path, datasets: Any) -> tuple[Any, Any, Any, Any]:
     )
 
 
+def load_cifar100(dataset_dir: Path, datasets: Any) -> tuple[Any, Any, Any, Any]:
+    import torch
+
+    train = datasets.CIFAR100(root=dataset_dir, train=True, download=True)
+    test = datasets.CIFAR100(root=dataset_dir, train=False, download=True)
+    return (torch.from_numpy(train.data).permute(0, 3, 1, 2),
+            torch.tensor(train.targets, dtype=torch.int64),
+            torch.from_numpy(test.data).permute(0, 3, 1, 2),
+            torch.tensor(test.targets, dtype=torch.int64))
+
+
 def load_mnist(dataset_dir: Path, datasets: Any) -> tuple[Any, Any, Any, Any]:
     train = datasets.MNIST(root=dataset_dir, train=True, download=True)
     test = datasets.MNIST(root=dataset_dir, train=False, download=True)
@@ -200,7 +211,7 @@ def prepare_lowrank(validation_fraction: float, seed: int, force: bool, torch: A
 def main() -> None:
     args = parse_args()
     torch, torchvision_datasets = require_dependencies()
-    loaders = {"cifar10": load_cifar10, "mnist": load_mnist, "fashion_mnist": load_fashion_mnist}
+    loaders = {"cifar10": load_cifar10, "cifar100": load_cifar100, "mnist": load_mnist, "fashion_mnist": load_fashion_mnist}
 
     for name in args.datasets:
         if name == "lowrank":

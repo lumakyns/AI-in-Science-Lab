@@ -1,0 +1,20 @@
+program: src/tome/training.py
+method: grid
+metric:
+  name: validation/accuracy
+  goal: maximize
+parameters:
+  model.reduction:
+    values: [0, 2, 4]
+  optimizer.learning_rate:
+    values: [0.0003, 0.0005]
+  seed:
+    values: [0, 1, 2]
+command:
+  - ${env}
+  - ${interpreter}
+  - -m
+  - src.tome.training
+  - --config
+  - src/tome/config.yaml
+  - ${args_no_hyphens}
