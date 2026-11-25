@@ -11,7 +11,7 @@ This is a CIFAR-scale ViT trained from scratch, using the algorithm described in
 It uses 4x4 patches, width 192, nine transformer blocks, three attention heads,
 four merges per block, weighted token averaging, a protected class token and
 proportional attention. The 64 spatial patches reduce to 28 spatial tokens.
-Default training is 100 epochs, batch size 128, AdamW, five warmup epochs and
+Default training is 30 epochs, batch size 128, AdamW, five warmup epochs and
 cosine learning-rate decay. Configured seed, architecture, loader, training,
 checkpoint and W&B options are all in `config.yaml`.
 
@@ -40,6 +40,13 @@ A detached launch uses `subprocess.Popen` with `start_new_session=True`,
 `stdin=subprocess.DEVNULL`, and explicit environment interpreter, recording its
 PID to `checkpoints/tome/study.pid` and output to `checkpoints/tome/study.log`.
 
-Create a sweep with `wandb sweep --project tome src/tome/sweep.yaml`. Dotted
-`key=value` arguments override the same YAML configuration (no separate defaults).
-The sweep compares reductions including r=0 as an ordinary ViT baseline.
+Create a sweep with `wandb sweep --project tome src/tome/sweep.yaml`, then run
+`wandb agent <sweep-path>`. Dotted `key=value` arguments override the same YAML
+configuration. The six-run grid compares `model.merge_during_training=true`
+and `false` across matched seeds 0, 1 and 2, keeping all other settings fixed.
+Both arms evaluate with r=4 merging; the false arm trains with all 65 tokens.
+This isolates training-time merging versus applying ToMe only at inference.
+Setting `model.reduction=0` separately gives an ordinary ViT baseline.
+Grouping figures use the same first four unaugmented, real CIFAR-100 validation
+samples in every run, with inference-time merging shown in both arms. The
+resolved config records their indices and training/evaluation token counts.

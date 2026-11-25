@@ -70,4 +70,4 @@ def loaders(config, dataset, seed):
         shuffle=split == 'train', num_workers=c['num_workers'], pin_memory=c['pin_memory'],
         worker_init_fn=seed_worker, generator=torch.Generator().manual_seed(seed),
         persistent_workers=c['num_workers'] > 0,
-    ) for split in ('train', 'validation', 'test')}
+    ) for split in ('train', 'validation')}

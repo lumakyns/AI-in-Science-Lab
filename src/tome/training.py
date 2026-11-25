@@ -5,7 +5,6 @@ import json
 import math
 from pathlib import Path
 import random
-import time
 
 import matplotlib
 matplotlib.use('Agg')
@@ -43,14 +42,11 @@ def learning_rate(config, epoch):
     return config['optimizer']['learning_rate'] * ratio
 
 
-def pass_epoch(model, loader, device, config, *, optimizer=None, scaler=None, report=None):
+def pass_epoch(model, loader, device, config, *, optimizer=None, scaler=None):
     model.train(optimizer is not None)
-    total_loss = total_correct = total_top5 = count = 0
-    if device.type == "cuda":
-        torch.cuda.synchronize(); torch.cuda.reset_peak_memory_stats(device)
+    total_loss = total_correct = count = 0
     amp = config['training']['amp'] and device.type == 'cuda'
     maximum = config['training']['max_batches']
-    started = time.monotonic()
     with torch.set_grad_enabled(optimizer is not None):
         for batch, (images, labels) in enumerate(loader, 1):
             if maximum is not None and batch > maximum:
@@ -73,20 +69,11 @@ def pass_epoch(model, loader, device, config, *, optimizer=None, scaler=None, re
                 scaler.step(optimizer)
                 scaler.update()
             total_loss += loss.item() * len(labels)
-            predictions = logits.detach().topk(5, dim=1).indices
-            total_correct += (predictions[:, 0] == labels).sum().item()
-            total_top5 += (predictions == labels[:, None]).any(1).sum().item()
+            total_correct += (logits.detach().argmax(1) == labels).sum().item()
             count += len(labels)
-            if report is not None:
-                report(batch, total_loss / count, total_correct / count)
     if not count:
         raise ValueError('Empty loader')
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
-    seconds = time.monotonic()-started
-    return dict(loss=total_loss/count, accuracy=total_correct/count, top5_accuracy=total_top5/count,
-                examples=count, seconds=seconds, examples_per_second=count/seconds,
-                peak_memory_mib=torch.cuda.max_memory_allocated(device)/2**20 if device.type == 'cuda' else 0)
+    return dict(loss=total_loss/count, accuracy=total_correct/count)
 
 
 def load_config(path, overrides=()):
@@ -111,7 +98,7 @@ def load_config(path, overrides=()):
         raise ValueError('Use project tome and explicit online/offline mode')
     if Path(config['checkpoint']['dir']) != Path('checkpoints/tome'):
         raise ValueError('checkpoint.dir must be checkpoints/tome')
-    for section, keys in {'training': ('epochs', 'cpu_threads', 'log_every_batches'),
+    for section, keys in {'training': ('epochs', 'cpu_threads'),
                           'dataloader': ('batch_size', 'eval_batch_size'), 'visualization': ('samples',)}.items():
         for key in keys:
             if type(config[section][key]) is not int or config[section][key] < 1:
@@ -161,7 +148,7 @@ def save_merge_figures(model, images, labels, directory, epoch, config):
         axes = axes.flatten()
         original = originals[sample].permute(1, 2, 0).numpy()
         axes[0].imshow(original)
-        axes[0].set_title(f'Fixed validation sample {sample}\nlabel={labels[sample].item()}, pred={logits[sample].argmax().item()}')
+        axes[0].set_title(f'CIFAR-100 validation sample {sample}\nlabel={labels[sample].item()}, pred={logits[sample].argmax().item()}')
         axes[0].axis('off')
         for block, trace in enumerate(traces):
             # [current tokens, original tokens]; exclude CLS original column.
@@ -237,6 +224,10 @@ def run_experiment(config, *, data=None):
                 'split_examples': {split: len(loader.dataset) for split, loader in data.items()},
                 'input_shape': list(model.input_shape), 'patch_grid': list(model.grid),
                 'tokens_after_blocks_including_cls': model.token_counts,
+                'training_tokens_after_blocks_including_cls': (model.token_counts if model.merge_during_training
+                    else [model.grid[0] * model.grid[1] + 1] * len(model.blocks)),
+                'visualization_source': 'fixed unaugmented CIFAR-100 validation samples',
+                'visualization_sample_indices': list(range(sample_count)),
                 'torch_version': str(torch.__version__), 'cuda_runtime': torch.version.cuda,
                 'device_name': torch.cuda.get_device_name(device) if device.type == 'cuda' else 'cpu',
                 'initialization': 'from scratch; no pretrained weights',
@@ -244,8 +235,9 @@ def run_experiment(config, *, data=None):
     (directory / 'config.yaml').write_text(yaml.safe_dump(resolved))
     run = wandb.init(project=config['wandb']['project'], entity=config['wandb']['entity'],
                      mode=config['wandb']['mode'], group=TIMESTAMP,
-                     name=f'vit-tome-cifar100-seed{config["seed"]}-{TIMESTAMP}', config=resolved,
-                     tags=config['wandb']['tags'], dir=str(directory / 'logs'))
+                     name=f'vit-tome-train{int(model.merge_during_training)}-cifar100-seed{config["seed"]}-{TIMESTAMP}', config=resolved,
+                     tags=config['wandb']['tags'], dir=str(directory / 'logs'),
+                     settings=wandb.Settings(x_disable_stats=True, console='off'))
     if run is None or (config['wandb']['mode'] == 'online' and run.offline):
         raise RuntimeError('W&B did not initialize in requested mode')
     (directory / 'wandb_url.txt').write_text(str(run.url) + '\n')
@@ -254,25 +246,16 @@ def run_experiment(config, *, data=None):
     history, best_accuracy, best_epoch = [], -1.0, 0
     try:
         run.define_metric('epoch')
-        for split in ('train', 'validation', 'optimizer', 'figures'):
+        for split in ('train', 'validation', 'optimizer'):
             run.define_metric(f'{split}/*', step_metric='epoch')
-        initial = save_merge_figures(model, fixed_images, fixed_labels, directory / 'images/patch_merges', 0, config)
-        run.log({'epoch': 0, 'figures/patch_merges': [wandb.Image(str(p)) for p in initial]})
+        save_merge_figures(model, fixed_images, fixed_labels, directory / 'images/patch_merges', 0, config)
         for epoch in range(1, config['training']['epochs'] + 1):
             for group in optimizer.param_groups:
                 group['lr'] = learning_rate(config, epoch)
-            def report(batch, loss, accuracy):
-                if batch % config['training']['log_every_batches'] == 0:
-                    row = {'epoch': epoch, 'batch': batch, 'train/running_loss': loss, 'train/running_accuracy': accuracy}
-                    run.log(row)
-                    with (directory / 'batch_metrics.jsonl').open('a') as handle:
-                        handle.write(json.dumps(row) + '\n')
-                    print(f'epoch={epoch} batch={batch} loss={loss:.4f} accuracy={accuracy:.4f}', flush=True)
             metrics = {'epoch': epoch, 'optimizer/learning_rate': optimizer.param_groups[0]['lr']}
             for split in ('train', 'validation'):
                 values = pass_epoch(model, data[split], device, config,
-                                    optimizer=optimizer if split == 'train' else None, scaler=scaler,
-                                    report=report if split == 'train' else None)
+                                    optimizer=optimizer if split == 'train' else None, scaler=scaler)
                 metrics.update({f'{split}/{key}': value for key, value in values.items()})
             history.append(metrics)
             with (directory / 'metrics.jsonl').open('a') as handle:
@@ -285,21 +268,12 @@ def run_experiment(config, *, data=None):
                 if enabled:
                     save_checkpoint(directory / f'checkpoints/{name}.pt', model, optimizer, scaler,
                                     epoch, resolved, best_accuracy)
-            paths = save_merge_figures(model, fixed_images, fixed_labels, directory / 'images/patch_merges', epoch, config)
-            curve = save_curves(history, directory / 'images', epoch)
-            run.log({**metrics, 'figures/learning_curves': wandb.Image(str(curve)),
-                     'figures/patch_merges': [wandb.Image(str(p)) for p in paths]})
+            save_merge_figures(model, fixed_images, fixed_labels, directory / 'images/patch_merges', epoch, config)
+            save_curves(history, directory / 'images', epoch)
+            run.log(metrics)
             print(f'epoch={epoch}/{config["training"]["epochs"]} train_acc={metrics["train/accuracy"]:.4f} '
-                  f'val_acc={metrics["validation/accuracy"]:.4f} train_seconds={metrics["train/seconds"]:.1f}', flush=True)
-        if config['checkpoint']['save_best']:
-            # Full training checkpoint contains RNG states as well as tensor weights.
-            best = torch.load(directory / 'checkpoints/best.pt', map_location=device, weights_only=False)
-            model.load_state_dict(best['model'])
-        test = pass_epoch(model, data['test'], device, config)
-        final = {f'test/{key}': value for key, value in test.items()}
-        final.update({'best_validation_accuracy': best_accuracy, 'best_epoch': best_epoch,
-                      'test_checkpoint': 'best' if config['checkpoint']['save_best'] else 'last', 'wandb_url': run.url})
-        run.log({key: value for key, value in final.items() if key.startswith('test/')})
+                  f'val_acc={metrics["validation/accuracy"]:.4f}', flush=True)
+        final = {'best_validation_accuracy': best_accuracy, 'best_epoch': best_epoch}
         run.summary.update(final)
         (directory / 'result.json').write_text(json.dumps(final, indent=2) + '\n')
     except BaseException:
@@ -307,7 +281,7 @@ def run_experiment(config, *, data=None):
         raise
     else:
         run.finish()
-        (directory / 'COMPLETE').write_text('Training and final test evaluation completed.\n')
+        (directory / 'COMPLETE').write_text('Training and validation completed.\n')
     return directory
 
 

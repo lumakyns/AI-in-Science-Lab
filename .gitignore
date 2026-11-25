@@ -1,19 +1,19 @@
+# Local configuration and Python caches.
+/.codex/
+/.agents/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Run artifacts belong under checkpoints, including W&B files.
 **/wandb/
 *.log
-.agents
-.codex
-__pycache__/
+/checkpoints/**
+!/checkpoints/**/
+!/checkpoints/**/.gitkeep
 
-# Checkpoints are local run artifacts. Keep experiment placeholders in Git.
-checkpoints/**
-!checkpoints/**/
-!checkpoints/**/.gitkeep
-
-# Dataset contents are local/generated. Keep the directory skeleton in Git.
-data/**
-!data/**/
-!data/**/.gitkeep
-!data/download.py
-
-packages/correlation/data/
-packages/correlation/outputs/
+# Track dataset placeholders and the preparation script only.
+/data/**
+!/data/**/
+!/data/**/.gitkeep
+!/data/download.py

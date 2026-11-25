@@ -4,10 +4,8 @@ metric:
   name: validation/accuracy
   goal: maximize
 parameters:
-  model.reduction:
-    values: [0, 2, 4]
-  optimizer.learning_rate:
-    values: [0.0003, 0.0005]
+  model.merge_during_training:
+    values: [true, false]
   seed:
     values: [0, 1, 2]
 command:

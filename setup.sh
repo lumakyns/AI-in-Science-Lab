@@ -14,7 +14,7 @@ fail() {
 }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "this setup script supports Linux only"
-[[ -f "src/separation/config.yaml" && -f "src/separation/sweep.yaml" && \
+[[ -f "src/tome/config.yaml" && -f "src/tome/sweep.yaml" && \
   -f "data/download.py" ]] || \
   fail "run this script from the AI-in-Science-Lab repository root"
 command -v nvidia-smi >/dev/null 2>&1 || \
@@ -52,20 +52,8 @@ else
   trap - EXIT
 fi
 
-# Load Conda in this non-interactive shell. `conda init` prepares future shells.
+# Load Conda in this shell.
 eval "$("${CONDA_EXECUTABLE}" shell.bash hook)"
-conda init bash >/dev/null
-
-clean_package_caches() {
-  conda clean --all --yes >/dev/null 2>&1 || true
-  PIP_NO_CACHE_DIR=false python -m pip cache purge >/dev/null 2>&1 || true
-}
-
-# CUDA wheels are large. Avoid keeping a second copy in package caches, and
-# repeat this cleanup on all exits so an interrupted installation stays small.
-echo "Clearing Conda and pip package caches to minimize disk usage..."
-clean_package_caches
-trap clean_package_caches EXIT
 
 if conda env list | awk '{print $1}' | grep -Fxq "${ENVIRONMENT_NAME}"; then
   echo "Updating existing Conda environment: ${ENVIRONMENT_NAME}"
@@ -83,10 +71,10 @@ python -m pip install --upgrade pip
 echo "Installing CUDA-enabled PyTorch from ${PYTORCH_INDEX_URL}..."
 python -m pip install --no-cache-dir --upgrade torch torchvision \
   --index-url "${PYTORCH_INDEX_URL}"
-python -m pip install --no-cache-dir --upgrade numpy pyyaml wandb
+python -m pip install --no-cache-dir --upgrade numpy pyyaml wandb matplotlib
 
-echo "Preparing MNIST and CIFAR-10..."
-python data/download.py mnist cifar10
+echo "Preparing CIFAR-100..."
+python data/download.py cifar100
 
 echo "Verifying the environment and NVIDIA GPU..."
 python - <<'PY'
@@ -95,7 +83,7 @@ import torchvision
 import yaml
 import wandb
 
-from src.separation.training import load_yaml
+from src.tome.training import load_config
 
 if not torch.cuda.is_available():
     raise SystemExit(
@@ -103,33 +91,27 @@ if not torch.cuda.is_available():
         "and AI_SCIENCE_PYTORCH_INDEX_URL."
     )
 
-configuration = load_yaml("src/separation/config.yaml")
+configuration = load_config("src/tome/config.yaml")
 device_name = torch.cuda.get_device_name(0)
 print(f"PyTorch: {torch.__version__}")
 print(f"torchvision: {torchvision.__version__}")
 print(f"CUDA runtime: {torch.version.cuda}")
 print(f"GPU: {device_name}")
 print(f"Configured dataset: {configuration['dataset']}")
+# Exercise the actual CUDA device without starting training or tracking.
+x = torch.randn(2, 8, device='cuda', requires_grad=True)
+layer = torch.nn.Linear(8, 4).to('cuda')
+layer(x).square().mean().backward()
+torch.cuda.synchronize()
+if x.grad is None or not torch.isfinite(x.grad).all():
+    raise SystemExit("CUDA backward verification failed")
 print("Environment verification passed.")
 PY
 
-# torchvision retains downloaded archives and extracted source files even
-# after data/download.py creates the .pt files used by this repository.
-if [[ "${AI_SCIENCE_KEEP_RAW_DATA:-0}" != "1" ]]; then
-  echo "Removing redundant raw dataset downloads..."
-  rm -f data/cifar10/cifar-10-python.tar.gz
-  rm -rf data/cifar10/cifar-10-batches-py
-  rm -rf data/mnist/MNIST
-fi
-
-clean_package_caches
-trap - EXIT
-
-echo
 echo "Setup complete. Open a new shell or run:"
 echo "  conda activate ${ENVIRONMENT_NAME}"
 echo "Then start training with:"
-echo "  python -m src.separation.training --config src/separation/config.yaml"
+echo "  python -m src.tome.training --config src/tome/config.yaml"
 echo "Or create a W&B sweep with:"
-echo "  wandb sweep --project separation src/separation/sweep.yaml"
-echo "  wandb agent <entity>/separation/<sweep-id>"
+echo "  wandb sweep --project tome src/tome/sweep.yaml"
+echo "  wandb agent <entity>/tome/<sweep-id>"

@@ -1,85 +1,66 @@
-# Research repository conventions
+# Repository conventions
 
-Each first-level directory under `src/` is an independent experiment.
+## Layout
 
-## Layout and ownership
+- `src/<experiment>/`: independent experiments containing `README.md`,
+  `config.yaml`, `datasets.py`, `training.py`, `models/`, and
+  `notes/experiments.txt`; add `sweep.yaml` for sweeps.
+- `data/`: dataset placeholders and `download.py`. Track only `.gitkeep` in
+  dataset directories; prepare missing data with `python data/download.py <dataset>`.
+- `checkpoints/<experiment>/`: all generated weights, figures, logs, resolved
+  configs, and W&B files. Never commit run artifacts.
+- `archive/`: historical code, research notes, and disabled automation.
+  `checkpoints/archive/` holds historical local run artifacts.
+- `setup.sh`: environment setup, run from the repository root.
 
-```text
-data/download.py
-data/<dataset>/.gitkeep
-checkpoints/<experiment>/
-src/<experiment>/
-  __init__.py
-  README.md
-  config.yaml
-  datasets.py
-  training.py
-  notes/experiments.txt
-  models/
-    __init__.py
-    <model_family>.py
-```
+## Experiment code
 
-- Keep design notes in `notes/experiments.txt`: at most two short technical
-  paragraphs, updated when the design changes. Do not create `latex/` notes.
-- Put reusable models only in `models/`, one family per file, and export
-  supported models from `models/__init__.py`. Keep imports package-safe;
-  do not modify `sys.path` at runtime.
-- Each experiment owns all its dataset logic in its own `datasets.py`:
-  enums, metadata, loaders, transforms, preprocessing, and splits. Never
-  import dataset code across experiments; duplicate it when needed.
-  Shared utilities under `src/` must be dataset-agnostic.
-- Hardcode a local string-valued `Dataset` enum with one member per dataset
-  directory in `data/`. Adding/removing a dataset requires updating its
-  `.gitkeep` and every experiment's enum in the same change.
-- Every model constructor accepts keyword `dataset: Dataset`, not a raw
-  string. Use metadata beside the local enum for channels, dimensions, and
-  classes; reject unsupported datasets and incompatible shapes early.
-- Prepare missing data through `data/download.py`. Only `.gitkeep` placeholders
-  are tracked in dataset directories. Keep checkpoints, images, and other run
-  outputs under `checkpoints/<experiment>/`; never commit data or run artifacts,
-  including W&B files.
+- Each experiment owns all dataset code in `datasets.py`; never import dataset
+  logic across experiments. Shared utilities must be dataset-agnostic.
+- Define a local string-valued `Dataset` enum matching the directories in
+  `data/`. Dataset additions/removals update placeholders and every experiment's
+  enum together. Keep channels, dimensions, and classes beside the enum.
+- Model constructors accept keyword `dataset: Dataset`. Reject unsupported
+  datasets and incompatible shapes early.
+- Put reusable model families in separate files under `models/`, exporting
+  supported models from `models/__init__.py`. Use package-safe imports;
+  never modify `sys.path` at runtime.
+- Keep design notes to at most two short technical paragraphs in
+  `notes/experiments.txt`, updating them when the design changes. No `latex/` notes.
 
-## Training and tracking
+## Training
 
-- The sole training entry point runs from the repository root:
+- Run from the root:
   `python -m src.<experiment>.training --config src/<experiment>/config.yaml`.
-- YAML is the source of truth for dataset, model, optimizer, scheduler, seeds,
-  duration, batch size, loaders, checkpoints, and W&B settings. CLI selects
-  the config; do not build a second configuration system or store credentials.
-- Keep important experimental choices sweep-ready. Put sweep definitions in
-  `src/<experiment>/sweep.yaml`, usable with `wandb sweep`, with the module
-  training command and dotted parameter overrides where needed.
-- Seed Python, NumPy, and the ML framework; select the device explicitly.
-  Record the fully resolved config and useful model/data metadata in W&B.
-- Create one UTC timestamp at process startup (`YYYYMMDDTHHMMSSZ`). Use a stable W&B
-  project `<experiment-folder>`; use the timestamp for run artifacts and run grouping.
-- Log `train/loss`, epoch, optimizer learning rate, validation loss when
-  applicable, and task metrics such as accuracy with consistent namespaced
-  keys. Save per-epoch figures in the run's `images/` directory.
-- Fail clearly on invalid config, data, or W&B initialization. Offline tracking
-  must be explicitly configured; never silently disable W&B.
+- YAML controls data, models, optimization, seeds, duration, loaders,
+  checkpoints, and tracking. CLI selects the config; dotted overrides may
+  support sweeps. Do not add another configuration system or store credentials.
+- Keep experimental choices sweep-ready. `sweep.yaml` must work with
+  `wandb sweep` and invoke the module training command.
+- Seed Python, NumPy, and the ML framework; explicitly select the device.
+- Use one startup UTC timestamp (`YYYYMMDDTHHMMSSZ`) for run directories and
+  W&B grouping, with stable W&B project `<experiment>`.
+- Record resolved config and useful model/data metadata. Log `train/loss`,
+  epoch, optimizer learning rate, validation loss when applicable, and
+  namespaced task metrics. Save per-epoch figures in the run's `images/`.
+- Keep W&B files inside the run directory. Fail clearly on invalid config,
+  missing/invalid data, or W&B initialization failure. Offline tracking must
+  be explicit; never silently disable tracking.
 
-## Environment and long runs
+## Environment and execution
 
-- Use a Conda environment named `ai-science` for future work. Activate it or
-  use `conda run --no-capture-output -n ai-science ...`; install dependencies
-  with that environment's `python -m pip`. `scripts/setup.sh` defaults to this
-  name. Prefer a self-contained environment over dependent virtualenvs.
+- Use the self-contained Conda environment `ai-science`, activated or through
+  `conda run --no-capture-output -n ai-science ...`. Install dependencies with
+  that environment's `python -m pip`.
 - Before GPU training, check `nvidia-smi`, `torch.version.cuda`, and
-  `torch.cuda.is_available()`, then run a small forward/backward check on the
-  actual device. Install a compatible CUDA-enabled PyTorch/torchvision pair
-  when needed; a visible GPU does not imply the Python environment supports it.
-  Apply any required library-path fixes to the launched process only.
-- Verify experiment imports and config loading before handoff. When practical,
-  run a small synthetic smoke test covering training, outputs, and tracking
-  before launching a full study.
-- Launch authorized long studies as detached processes (for example,
-  `subprocess.Popen(..., start_new_session=True)` with stdin disconnected).
-  Redirect stdout/stderr to `checkpoints/<experiment>/study.log` and record
-  the PID in `study.pid`. Use an explicit environment interpreter or Conda run.
-- Check that the process is alive, training progresses, artifacts appear, and
-  W&B syncs. Report the config, output paths, W&B link, and current status;
-  distinguish launched work from completed results.
-- Preserve environments and dependencies used by running jobs. Do not migrate,
-  remove, or modify them mid-run; use `ai-science` for subsequent jobs.
+  `torch.cuda.is_available()`, then verify a small forward/backward pass on the
+  actual device. Use a compatible CUDA PyTorch/torchvision pair; any library-path
+  fixes apply only to the launched process.
+- Verify imports and config loading; where practical, smoke-test training,
+  outputs, and tracking before a full study.
+- Launch authorized long studies detached, with stdin disconnected and an
+  explicit environment interpreter. Write stdout/stderr to
+  `checkpoints/<experiment>/study.log` and the PID to `study.pid`.
+- Verify progress, artifacts, and W&B sync. Report config, output paths,
+  W&B link, and whether work is running or complete.
+- Never change environments or dependencies used by running jobs.

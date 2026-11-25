@@ -62,14 +62,14 @@ class Block(nn.Module):
         self.dropout = dropout
         self.path = DropPath(drop_path)
 
-    def forward(self, x, size, source=None):
+    def forward(self, x, size, source=None, *, merge_tokens=True):
         batch, tokens, dim = x.shape
         q, k, v = self.qkv(self.norm1(x)).reshape(batch, tokens, 3, self.heads, dim // self.heads).permute(2, 0, 3, 1, 4).unbind(0)
         bias = size.log()[:, None, :, 0].unsqueeze(2) if self.proportional_attention else None
         attended = F.scaled_dot_product_attention(q, k, v, attn_mask=bias,
                     dropout_p=self.dropout if self.training else 0.0)
         x = x + self.path(self.projection(attended.transpose(1, 2).reshape(batch, tokens, dim)))
-        merge = matching(k.mean(1), self.reduction)
+        merge = matching(k.mean(1), self.reduction if merge_tokens else 0)
         if source is not None:
             source = merge(source, mode='amax')
         weighted = merge(x * size)
@@ -81,7 +81,7 @@ class Block(nn.Module):
 class ToMeViT(nn.Module):
     def __init__(self, *, dataset: Dataset, patch_size=4, dim=192, depth=9, heads=3,
                  mlp_ratio=4.0, dropout=0.0, drop_path=0.1, reduction=4,
-                 proportional_attention=True):
+                 proportional_attention=True, merge_during_training=True):
         super().__init__()
         (channels, height, width), classes, _, _ = specification(dataset)
         for key, value in dict(patch_size=patch_size, dim=dim, depth=depth, heads=heads).items():
@@ -93,6 +93,9 @@ class ToMeViT(nn.Module):
             raise ValueError('Invalid dropout, drop_path, or mlp_ratio')
         if type(proportional_attention) is not bool:
             raise ValueError('proportional_attention must be a boolean')
+        if type(merge_during_training) is not bool:
+            raise ValueError('merge_during_training must be a boolean')
+        self.merge_during_training = merge_during_training
         reductions = [reduction] * depth if type(reduction) is int else reduction
         if not isinstance(reductions, list) or len(reductions) != depth or any(type(r) is not int or r < 0 for r in reductions):
             raise ValueError('reduction must be a nonnegative integer or one integer per block')
@@ -128,7 +131,8 @@ class ToMeViT(nn.Module):
         source = torch.eye(x.shape[1], device=x.device)[None].expand(len(x), -1, -1) if trace else None
         traces = []
         for block in self.blocks:
-            x, size, source = block(x, size, source)
+            x, size, source = block(x, size, source,
+                                   merge_tokens=not self.training or self.merge_during_training)
             if trace:
                 traces.append(source.detach().cpu())
         logits = self.head(self.norm(x)[:, 0])
